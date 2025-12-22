@@ -224,7 +224,12 @@ async function handleEvent(event) {
       return replyText(event.replyToken, helpText());
     }
 
-    
+    if (text === "狀態") {
+  return replyText(
+    event.replyToken,
+    `today=${getTodayISO_TW()} | FAQ=${faqItems.length} | dayTypeMap=${Object.keys(dayTypeMap||{}).length} | menuTypes=${Object.keys(menuDetails||{}).length}`
+  );
+}
 
     // Start
     if (text === "開始" || text.toLowerCase() === "start") {
@@ -316,6 +321,24 @@ async function handleEvent(event) {
       const msg = `【第 ${cur.day} 天・${dayTypeLabel(cur.dayType)}】\n⏰ ${t}\n${slot}`;
       return replyText(event.replyToken, msg);
     }
+
+    if (text.startsWith("FAQ測試")) {
+  const q = text.replace("FAQ測試", "").trim();
+  const t = applySynonyms(normalizeText(q));
+  let best = { score: 0, ans: null, id: null };
+
+  for (const item of faqItems || []) {
+    let score = 0;
+    for (const kwRaw of item.keywords || []) {
+      const kw = applySynonyms(normalizeText(kwRaw));
+      if (kw && t.includes(kw)) score += Math.min(3, Math.ceil(kw.length / 2));
+    }
+    if (score > best.score) best = { score, ans: item.answer, id: item.id };
+  }
+
+  return replyText(event.replyToken, `Q=${q}\nscore=${best.score}\nid=${best.id}\nans=${best.ans || "(no match)"}`);
+}
+
 
     // FAQ
     const faqAns = matchFAQ(text);
