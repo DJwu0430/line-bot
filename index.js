@@ -17,15 +17,30 @@ const client = new line.messagingApi.MessagingApiClient({
 // ===== Load knowledge files =====
 function loadJSON(relPath) {
   const full = path.join(__dirname, relPath);
+
+  // === Debug: print what Render can see ===
+  try {
+    console.log("WORKDIR __dirname =", __dirname);
+    console.log("ROOT FILES =", fs.readdirSync(__dirname));
+    const kdir = path.join(__dirname, "knowledge");
+    console.log("KNOWLEDGE exists? ", fs.existsSync(kdir));
+    if (fs.existsSync(kdir)) {
+      console.log("KNOWLEDGE FILES =", fs.readdirSync(kdir));
+    }
+  } catch (e) {
+    console.log("DEBUG LIST FILES ERROR:", e.message);
+  }
+
+  // === Safe read (don't crash immediately) ===
+  if (!fs.existsSync(full)) {
+    throw new Error(
+      `Missing file: ${full}\n` +
+      `請確認 GitHub repo 根目錄下有 knowledge/day_type_map.json，且已 push。`
+    );
+  }
+
   return JSON.parse(fs.readFileSync(full, "utf8"));
 }
-
-const dayTypeMap = loadJSON("knowledge/day_type_map.json");
-const menuDetails = loadJSON("knowledge/menu_details_by_day_type.json");
-const pushTemplates = loadJSON("knowledge/push_templates.json");
-const companionByDay = loadJSON("knowledge/companion_by_day.json");
-const faqItems = loadJSON("knowledge/faq_50.json").items;
-
 // ===== In-memory user state (MVP) =====
 // ⚠ Render 免費版/重啟會清空。正式版建議接 Google Sheet/DB。
 const userState = new Map(); // userId -> { startISO: "YYYY-MM-DD" }
