@@ -48,18 +48,20 @@ const faqItems = Array.isArray(faqJSON.items) ? faqJSON.items : [];
 const userState = new Map(); // userId -> { startISO: "YYYY-MM-DD" }
 
 // ===== Helpers =====
-function getTodayISO_UTC() {
+function getTodayISO_TW() {
   const d = new Date();
-  const yyyy = d.getUTCFullYear();
-  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
-  const dd = String(d.getUTCDate()).padStart(2, "0");
+  const tw = new Date(d.toLocaleString("en-US", { timeZone: "Asia/Taipei" }));
+  const yyyy = tw.getFullYear();
+  const mm = String(tw.getMonth() + 1).padStart(2, "0");
+  const dd = String(tw.getDate()).padStart(2, "0");
   return `${yyyy}-${mm}-${dd}`;
 }
 
 function daysBetweenISO(startISO, todayISO) {
-  const start = new Date(startISO + "T00:00:00Z");
-  const today = new Date(todayISO + "T00:00:00Z");
-  const diff = today - start;
+  // 用「台灣時區」的日期差，避免 UTC 差一天
+  const start = new Date(startISO + "T00:00:00");
+  const today = new Date(todayISO + "T00:00:00");
+  const diff = today.getTime() - start.getTime();
   return Math.floor(diff / (1000 * 60 * 60 * 24));
 }
 
@@ -89,7 +91,7 @@ function getCurrentDayAndType(userId) {
   const st = userState.get(userId);
   if (!st?.startISO) return null;
 
-  const todayISO = getTodayISO_UTC();
+  const todayISO = getTodayISO_TW();
   const day = clampDay(daysBetweenISO(st.startISO, todayISO) + 1);
   const dayType = resolveDayType(day);
   return { day, dayType };
@@ -104,31 +106,76 @@ function parseDayFromText(text) {
 }
 
 function buildStartISOFromDayInput(inputDay) {
-  const todayISO = getTodayISO_UTC();
-  const today = new Date(todayISO + "T00:00:00Z");
+  // 反推起始日：start = today - (inputDay - 1)
+  const todayISO = getTodayISO_TW();
+  const today = new Date(todayISO + "T00:00:00");
+
   const start = new Date(today);
-  start.setUTCDate(start.getUTCDate() - (inputDay - 1));
-  const yyyy = start.getUTCFullYear();
-  const mm = String(start.getUTCMonth() + 1).padStart(2, "0");
-  const dd = String(start.getUTCDate()).padStart(2, "0");
+  start.setDate(start.getDate() - (inputDay - 1));
+
+  const yyyy = start.getFullYear();
+  const mm = String(start.getMonth() + 1).padStart(2, "0");
+  const dd = String(start.getDate()).padStart(2, "0");
   return `${yyyy}-${mm}-${dd}`;
 }
 
+function normalizeText(s) {
+  return (s || "")
+    .toLowerCase()
+    .replace(/\s+/g, "")
+    .replace(/[，。！？、,.!?]/g, "");
+}
+
+function applySynonyms(t) {
+  const rules = [
+    ["今天哪一天", "今天是哪一天"],
+    ["今天哪天", "今天是哪一天"],
+    ["幾天", "第幾天"],
+    ["喝茶", "茶"],
+    ["咖啡因", "咖啡"],
+    ["酒精", "酒"],
+    ["手搖飲", "飲料"],
+    ["珍珠奶茶", "珍奶"],
+  ];
+  let out = t;
+  for (const [a, b] of rules) out = out.replaceAll(a, b);
+  return out;
+}
+
 function matchFAQ(text) {
-  const t = (text || "").trim();
+  let t = applySynonyms(normalizeText(text));
   if (!t) return null;
 
-  for (const item of faqItems) {
-    for (const kw of item.keywords || []) {
-      if (kw && t.includes(kw)) return item.answer;
+  let bestAns = null;
+  let bestScore = 0;
+
+  for (const item of faqItems || []) {
+    const kws = item.keywords || [];
+    if (!Array.isArray(kws) || !item.answer) continue;
+
+    let score = 0;
+
+    for (const kwRaw of kws) {
+      const kw = applySynonyms(normalizeText(kwRaw));
+      if (!kw) continue;
+
+      // 越長的 keyword 分數越高，避免短字亂命中
+      if (t.includes(kw)) score += Math.min(3, Math.ceil(kw.length / 2));
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestAns = item.answer;
     }
   }
-  return null;
+
+  // 門檻：至少 2 分才回（避免亂回）
+  return bestScore >= 2 ? bestAns : null;
 }
 
 function helpText() {
   return (
-    "你可以這樣用我 😊\n" +
+    "你可以這樣說 😊\n" +
     "1) 回「開始」：我會從今天幫你記錄 45 天進度\n" +
     "2) 回「第12天」：如果你已經在進行中，我可以直接對齊進度\n" +
     "3) 回「今天菜單」或「今天是哪一天」：我會告訴你今天第幾天＋日型＋重點提醒\n" +
@@ -144,6 +191,7 @@ async function replyText(replyToken, text) {
     messages: [{ type: "text", text }],
   });
 }
+
 
 // ===== Webhook =====
 app.post("/webhook", line.middleware(config), async (req, res) => {
@@ -176,14 +224,11 @@ async function handleEvent(event) {
       return replyText(event.replyToken, helpText());
     }
 
-    // Beverage quick catch
-    if (text.includes("咖啡") || text.includes("茶") || text.includes("飲料") || text.includes("酒")) {
-      return replyText(event.replyToken, "45 天計畫期間，茶、咖啡等刺激性飲料建議盡量不要，以白開水或溫水為主會最穩。");
-    }
+    
 
     // Start
     if (text === "開始" || text.toLowerCase() === "start") {
-      const todayISO = getTodayISO_UTC();
+      const todayISO = getTodayISO_TW();
       userState.set(userId, { startISO: todayISO });
 
       const day = 1;
@@ -275,6 +320,11 @@ async function handleEvent(event) {
     // FAQ
     const faqAns = matchFAQ(text);
     if (faqAns) return replyText(event.replyToken, faqAns);
+
+    // Beverage quick catch
+    if (text.includes("咖啡") || text.includes("茶") || text.includes("飲料") || text.includes("酒")) {
+      return replyText(event.replyToken, "45 天計畫期間，茶、咖啡等刺激性飲料建議盡量不要，以白開水或溫水為主會最穩。");
+    }
 
     // Fallback
     return replyText(
