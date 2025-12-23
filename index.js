@@ -1,3 +1,4 @@
+const fetch = require("node-fetch");
 const express = require("express");
 const line = require("@line/bot-sdk");
 const fs = require("fs");
@@ -437,6 +438,7 @@ app.listen(port, () => {
   console.log("[BOOT] FAQ items =", faqItems.length);
   console.log("[BOOT] dayTypeMap keys =", Object.keys(dayTypeMap || {}).length);
 });
+
 
 
 
