@@ -171,8 +171,7 @@ function matchFAQ(text) {
     }
   }
 
-  // 門檻：至少 2 分才回（避免亂回）
-  // ✅ 門檻：至少 1 分就回
+    // ✅ 門檻：至少 1 分就回
   return bestScore >= 1 ? bestAns : null;
 }
 
@@ -254,12 +253,18 @@ async function handleEvent(event) {
     `today=${getTodayISO_TW()} | FAQ=${faqItems.length} | dayTypeMap=${Object.keys(dayTypeMap||{}).length} | menuTypes=${Object.keys(menuDetails||{}).length}`
   );
 }
-
+if (text === "debug-start") {
+  const st = userState.get(userId);
+  return replyText(
+    event.replyToken,
+    `today=${getTodayISO_TW()}\nstartISO(inMemory)=${st?.startISO || "(none)"}`
+  );
+}
     // Start
     if (text === "開始" || text.toLowerCase() === "start") {
-      const todayISO = getTodayISO_TW();
-      userState.set(userId, { startISO: todayISO });
-      await upsertUserToSheet(userId, todayISO);
+        const todayISO = getTodayISO_TW();
+        userState.set(userId, { startISO: todayISO });
+        await upsertUserToSheet(userId, todayISO);
 
 
 
@@ -277,13 +282,12 @@ async function handleEvent(event) {
     }
 
     // Set day manually
-    if (text.includes("天")) {
-      const inputDay = parseDayFromText(text);
-      if (inputDay) {
-        const startISO = buildStartISOFromDayInput(inputDay);
-        userState.set(userId, { startISO });
-        await upsertUserToSheet(userId, startISO);
-
+   if (text.includes("天")) {
+  const inputDay = parseDayFromText(text);
+   if (inputDay) {
+      const startISO = buildStartISOFromDayInput(inputDay);
+      userState.set(userId, { startISO });
+      await upsertUserToSheet(userId, startISO); // 
 
         const dayType = resolveDayType(inputDay);
         const companion = companionByDay[String(inputDay)] || "我們一步一步來就好 😊";
@@ -404,4 +408,5 @@ app.listen(port, () => {
   console.log("[BOOT] FAQ items =", faqItems.length);
   console.log("[BOOT] dayTypeMap keys =", Object.keys(dayTypeMap || {}).length);
 });
+
 
