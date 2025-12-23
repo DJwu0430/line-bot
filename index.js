@@ -215,6 +215,36 @@ async function upsertUserToSheet(userId, startISO) {
     console.log("[WARN] upsertUserToSheet failed:", e.message);
   }
 }
+async function getUserStartISOFromSheet(userId) {
+  try {
+    const base = process.env.GAS_URL;
+    const key = process.env.GAS_KEY;
+    if (!base || !key) return null;
+
+    const url =
+      `${base}?action=get&key=${encodeURIComponent(key)}` +
+      `&userId=${encodeURIComponent(userId)}`;
+
+    const r = await fetch(url);
+    const txt = (await r.text()).trim(); // 例如回傳 2025-12-24 或 "none"
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(txt)) return null;
+    return txt;
+  } catch (e) {
+    console.log("[WARN] getUserStartISOFromSheet failed:", e.message);
+    return null;
+  }
+}
+async function ensureStartISO(userId) {
+  const inMem = userState.get(userId)?.startISO;
+  if (inMem) return inMem;
+
+  const fromSheet = await getUserStartISOFromSheet(userId);
+  if (fromSheet) {
+    userState.set(userId, { startISO: fromSheet });
+    return fromSheet;
+  }
+  return null;
+}
 
 
 // ===== Webhook =====
@@ -261,24 +291,28 @@ if (text === "debug-start") {
     `today=${getTodayISO_TW()}\nstartISO(inMemory)=${st?.startISO || "(none)"}`
   );
 }
+
+if (text === "debug-sheet") {
+  const s = await getUserStartISOFromSheet(userId);
+  return replyText(event.replyToken, `sheetStartISO=${s || "(none)"}`);
+}
+
     // Start
     if (text === "開始" || text.toLowerCase() === "start") {
-  const existing = userState.get(userId);
+  // 先確認是否已經開始（記憶體 or Sheet）
+  const startISO = await ensureStartISO(userId);
 
-  // 如果已經有 startISO（代表不是第一次）
-  if (existing?.startISO) {
+  if (startISO) {
     const cur = getCurrentDayAndType(userId);
-    if (cur) {
-      return replyText(
-        event.replyToken,
-        `你已經在進行中囉 😊\n` +
-        `今天是【第 ${cur.day} 天・${dayTypeLabel(cur.dayType)}】\n\n` +
-        `如果你真的想重新從第 1 天開始，請回我「重新開始」。`
-      );
-    }
+    return replyText(
+      event.replyToken,
+      `你已經在進行中囉 😊\n` +
+      `今天是【第 ${cur.day} 天・${dayTypeLabel(cur.dayType)}】\n\n` +
+      `如果你真的想重新從第 1 天開始，請回我「重新開始」。`
+    );
   }
 
-  // 第一次開始
+  // 沒開始過，才建立新的 startISO
   const todayISO = getTodayISO_TW();
   userState.set(userId, { startISO: todayISO });
   await upsertUserToSheet(userId, todayISO);
@@ -294,6 +328,7 @@ if (text === "debug-start") {
     `💛 今日陪伴：${companion}`
   );
 }
+
 
 if (text === "重新開始") {
   const todayISO = getTodayISO_TW();
@@ -334,6 +369,7 @@ if (manualDayMatch) {
 
     // Today menu summary (包含「今天是哪一天」)
     if (text === "今天菜單" || text === "今日菜單" || text.includes("今天是哪一天") || text === "今天是哪天") {
+      await ensureStartISO(userId);
       const cur = getCurrentDayAndType(userId);
       if (!cur) {
         return replyText(
@@ -352,6 +388,7 @@ if (manualDayMatch) {
 
     // Companion reminder
     if (text === "陪伴提醒" || text === "鼓勵我" || text === "提醒我") {
+      await ensureStartISO(userId);
       const cur = getCurrentDayAndType(userId);
       if (!cur) {
         return replyText(
@@ -366,6 +403,7 @@ if (manualDayMatch) {
     // Time-slot menu details
     const timeMatch = text.match(/(07:45|08:00|10:00|11:45|12:00|14:00|16:00|17:45|18:00|20:00)/);
     if (timeMatch) {
+      await ensureStartISO(userId);
       const cur = getCurrentDayAndType(userId);
       if (!cur) {
         return replyText(
@@ -438,6 +476,7 @@ app.listen(port, () => {
   console.log("[BOOT] FAQ items =", faqItems.length);
   console.log("[BOOT] dayTypeMap keys =", Object.keys(dayTypeMap || {}).length);
 });
+
 
 
 
