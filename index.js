@@ -262,45 +262,74 @@ if (text === "debug-start") {
 }
     // Start
     if (text === "開始" || text.toLowerCase() === "start") {
-        const todayISO = getTodayISO_TW();
-        userState.set(userId, { startISO: todayISO });
-        await upsertUserToSheet(userId, todayISO);
+  const existing = userState.get(userId);
 
-
-
-      const day = 1;
-      const dayType = resolveDayType(day);
-      const companion = companionByDay[String(day)] || "第一天最重要的不是完美，而是開始。你願意踏出這一步，本身就很棒了。";
-
-      const msg =
-        `已幫你從今天開始 ✅\n` +
-        `今天是【第 ${day} 天・${dayTypeLabel(dayType)}】\n` +
-        `${pushTemplates[dayType] || ""}\n\n` +
-        `💛 今日陪伴：${companion}\n\n` +
-        `你可以回我：\n- 今天菜單 / 今天是哪一天\n- 07:45 / 08:00 / 12:00 / 18:00（看時段細節）\n- 陪伴提醒\n- 第12天（對齊進度）`;
-      return replyText(event.replyToken, msg);
+  // 如果已經有 startISO（代表不是第一次）
+  if (existing?.startISO) {
+    const cur = getCurrentDayAndType(userId);
+    if (cur) {
+      return replyText(
+        event.replyToken,
+        `你已經在進行中囉 😊\n` +
+        `今天是【第 ${cur.day} 天・${dayTypeLabel(cur.dayType)}】\n\n` +
+        `如果你真的想重新從第 1 天開始，請回我「重新開始」。`
+      );
     }
+  }
+
+  // 第一次開始
+  const todayISO = getTodayISO_TW();
+  userState.set(userId, { startISO: todayISO });
+  await upsertUserToSheet(userId, todayISO);
+
+  const day = 1;
+  const dayType = resolveDayType(day);
+  const companion = companionByDay[String(day)] || "第一天最重要的不是完美，而是開始。";
+
+  return replyText(
+    event.replyToken,
+    `已幫你從今天開始 ✅\n` +
+    `今天是【第 ${day} 天・${dayTypeLabel(dayType)}】\n\n` +
+    `💛 今日陪伴：${companion}`
+  );
+}
+
+if (text === "重新開始") {
+  const todayISO = getTodayISO_TW();
+  userState.set(userId, { startISO: todayISO });
+  await upsertUserToSheet(userId, todayISO);
+
+  return replyText(
+    event.replyToken,
+    "好，我已幫你重新從第 1 天開始 😊\n今天不用完美，我會陪你一起走。"
+  );
+}
 
     // Set day manually
-   if (text.includes("天")) {
-  const inputDay = parseDayFromText(text);
-   if (inputDay) {
-      const startISO = buildStartISOFromDayInput(inputDay);
-      userState.set(userId, { startISO });
-      await upsertUserToSheet(userId, startISO); // 
+   const manualDayMatch = text.match(/^第\s*(\d{1,2})\s*天$/);
 
-        const dayType = resolveDayType(inputDay);
-        const companion = companionByDay[String(inputDay)] || "我們一步一步來就好 😊";
+if (manualDayMatch) {
+  const inputDay = parseInt(manualDayMatch[1], 10);
 
-        const msg =
-          `收到！我已把你進度設定為【第 ${inputDay} 天】✅\n` +
-          `今天日型是【${dayTypeLabel(dayType)}】\n` +
-          `${pushTemplates[dayType] || ""}\n\n` +
-          `💛 今日陪伴：${companion}\n\n` +
-          `你可以回我：今天菜單 / 08:00 / 12:00 / 18:00 / 陪伴提醒`;
-        return replyText(event.replyToken, msg);
-      }
-    }
+  if (inputDay < 1 || inputDay > 45) {
+    return replyText(event.replyToken, "天數請輸入 1～45 之間 😊");
+  }
+
+  const startISO = buildStartISOFromDayInput(inputDay);
+  userState.set(userId, { startISO });
+  await upsertUserToSheet(userId, startISO);
+
+  const dayType = resolveDayType(inputDay);
+  const companion = companionByDay[String(inputDay)] || "我們一步一步來就好 😊";
+
+  return replyText(
+    event.replyToken,
+    `好，我已幫你對齊進度 ✅\n` +
+    `今天是【第 ${inputDay} 天・${dayTypeLabel(dayType)}】\n\n` +
+    `💛 今日陪伴：${companion}`
+  );
+}
+
 
     // Today menu summary (包含「今天是哪一天」)
     if (text === "今天菜單" || text === "今日菜單" || text.includes("今天是哪一天") || text === "今天是哪天") {
@@ -408,5 +437,6 @@ app.listen(port, () => {
   console.log("[BOOT] FAQ items =", faqItems.length);
   console.log("[BOOT] dayTypeMap keys =", Object.keys(dayTypeMap || {}).length);
 });
+
 
 
