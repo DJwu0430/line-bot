@@ -5,9 +5,9 @@
   "scripts": {
     "start": "node index.js"
   },
-   "dependencies": {
+  "dependencies": {
     "@line/bot-sdk": "^9.9.0",
-    "express": "^4.22.1"
+    "express": "^4.22.1",
+    "node-fetch": "^2.6.7"
   }
 }
-
