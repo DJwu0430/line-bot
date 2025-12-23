@@ -1,7 +1,10 @@
+
 const express = require("express");
 const line = require("@line/bot-sdk");
 const fs = require("fs");
 const path = require("path");
+const fetch = require("node-fetch");
+
 
 // ===== LINE config (from Render env vars) =====
 const config = {
@@ -193,12 +196,21 @@ async function replyText(replyToken, text) {
 }
 async function upsertUserToSheet(userId, startISO) {
   try {
-    const base = process.env.GAS_URL;
-    const key = process.env.GAS_KEY;
-    if (!base || !key) return;
+    const base = process.env.GAS_URL; // https://script.google.com/macros/s/AKfycbwntXKiniu3AGLZFSqPW6pY4UoEkKqX1rDbIUZloRmpY-fO33B3Sgg-Wo-sTgal2oA5/exec
+    const key = process.env.GAS_KEY;  // linebot_2025_secret_h.p.oY
+    if (!base || !key) {
+      console.log("[WARN] GAS_URL or GAS_KEY missing");
+      return;
+    }
 
-    const url = `${base}?key=${encodeURIComponent(key)}&userId=${encodeURIComponent(userId)}&startISO=${encodeURIComponent(startISO)}`;
-    await fetch(url);
+    const url =
+      `${base}?key=${encodeURIComponent(key)}` +
+      `&userId=${encodeURIComponent(userId)}` +
+      `&startISO=${encodeURIComponent(startISO)}`;
+
+    const r = await fetch(url, { method: "GET" });
+    const txt = await r.text();
+    console.log("[GAS] status=", r.status, "body=", txt.slice(0, 120));
   } catch (e) {
     console.log("[WARN] upsertUserToSheet failed:", e.message);
   }
@@ -247,7 +259,8 @@ async function handleEvent(event) {
     if (text === "開始" || text.toLowerCase() === "start") {
       const todayISO = getTodayISO_TW();
       userState.set(userId, { startISO: todayISO });
-      await upsertUserToSheet(userId, todayISO);
+      await upsertUserToSheet(userId, startISO);
+
 
 
       const day = 1;
@@ -269,7 +282,7 @@ async function handleEvent(event) {
       if (inputDay) {
         const startISO = buildStartISOFromDayInput(inputDay);
         userState.set(userId, { startISO });
-        await upsertUserToSheet(userId, todayISO);
+        await upsertUserToSheet(userId, startISO);
 
 
         const dayType = resolveDayType(inputDay);
