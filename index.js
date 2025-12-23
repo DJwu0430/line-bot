@@ -191,6 +191,18 @@ async function replyText(replyToken, text) {
     messages: [{ type: "text", text }],
   });
 }
+async function upsertUserToSheet(userId, startISO) {
+  try {
+    const base = process.env.GAS_URL;
+    const key = process.env.GAS_KEY;
+    if (!base || !key) return;
+
+    const url = `${base}?key=${encodeURIComponent(key)}&userId=${encodeURIComponent(userId)}&startISO=${encodeURIComponent(startISO)}`;
+    await fetch(url);
+  } catch (e) {
+    console.log("[WARN] upsertUserToSheet failed:", e.message);
+  }
+}
 
 
 // ===== Webhook =====
@@ -235,6 +247,8 @@ async function handleEvent(event) {
     if (text === "開始" || text.toLowerCase() === "start") {
       const todayISO = getTodayISO_TW();
       userState.set(userId, { startISO: todayISO });
+      await upsertUserToSheet(userId, todayISO);
+
 
       const day = 1;
       const dayType = resolveDayType(day);
@@ -255,6 +269,8 @@ async function handleEvent(event) {
       if (inputDay) {
         const startISO = buildStartISOFromDayInput(inputDay);
         userState.set(userId, { startISO });
+        await upsertUserToSheet(userId, todayISO);
+
 
         const dayType = resolveDayType(inputDay);
         const companion = companionByDay[String(inputDay)] || "我們一步一步來就好 😊";
