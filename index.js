@@ -3,7 +3,7 @@ const express = require("express");
 const line = require("@line/bot-sdk");
 const fs = require("fs");
 const path = require("path");
-const fetch = require("node-fetch");
+
 
 
 // ===== LINE config (from Render env vars) =====
@@ -259,7 +259,7 @@ async function handleEvent(event) {
     if (text === "開始" || text.toLowerCase() === "start") {
       const todayISO = getTodayISO_TW();
       userState.set(userId, { startISO: todayISO });
-      await upsertUserToSheet(userId, startISO);
+      await upsertUserToSheet(userId, todayISO);
 
 
 
