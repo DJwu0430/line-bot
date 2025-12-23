@@ -1,4 +1,3 @@
-
 const express = require("express");
 const line = require("@line/bot-sdk");
 const fs = require("fs");
@@ -173,7 +172,8 @@ function matchFAQ(text) {
   }
 
   // 門檻：至少 2 分才回（避免亂回）
-  return bestScore >= 2 ? bestAns : null;
+  // ✅ 門檻：至少 1 分就回
+  return bestScore >= 1 ? bestAns : null;
 }
 
 function helpText() {
@@ -404,3 +404,4 @@ app.listen(port, () => {
   console.log("[BOOT] FAQ items =", faqItems.length);
   console.log("[BOOT] dayTypeMap keys =", Object.keys(dayTypeMap || {}).length);
 });
+
