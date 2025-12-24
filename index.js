@@ -227,17 +227,31 @@ async function upsertUserToSheet(targetId, startISO) {
     console.log("[WARN] upsertUserToSheet failed:", e.message);
   }
 }
-async function getStartISOFromSheetRaw(params) {
-  const base = process.env.GAS_URL;
-  const key = process.env.GAS_KEY;
-  if (!base || !key) return { status: 0, text: "(missing GAS_URL/GAS_KEY)" };
+async function getStartISOFromSheet(targetType, targetId) {
+  try {
+    const base = process.env.GAS_URL;
+    const key = process.env.GAS_KEY;
+    if (!base || !key) return null;
 
-  const qs = new URLSearchParams({ action: "get", key, ...params });
-  const url = `${base}?${qs.toString()}`;
+    const qs = new URLSearchParams({ action: "get", key });
 
-  const r = await fetch(url);
-  const text = (await r.text()).trim();
-  return { status: r.status, text, url };
+    if (targetType === "group") qs.set("groupId", targetId);
+    else if (targetType === "room") qs.set("roomId", targetId);
+    else qs.set("userId", targetId);
+
+    const url = `${base}?${qs.toString()}`;
+    const r = await fetch(url);
+    const txt = (await r.text()).trim();
+
+    // 為了 debug 建議你先 log 原文（超重要）
+    console.log("[GAS GET]", { url, status: r.status, txt });
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(txt)) return null;
+    return txt;
+  } catch (e) {
+    console.log("[WARN] getStartISOFromSheet failed:", e.message);
+    return null;
+  }
 }
 
 async function ensureStartISO(targetId) {
@@ -294,16 +308,31 @@ async function handleEvent(event) {
       );
     }
 
-    if (text === "debug-start") {
-      const st = userState.get(targetId);
-      return replyText(
-        event.replyToken,
-        `today=${getTodayISO_TW()}\n` +
-        `targetType=${targetType}\n` +
-        `targetId=${targetId}\n` +
-        `startISO(inMemory)=${st?.startISO || "(none)"}`
-      );
-    }
+function getTarget_(event) {
+  const src = event.source || {};
+  if (src.type === "group") return { targetType: "group", targetId: src.groupId };
+  if (src.type === "room")  return { targetType: "room",  targetId: src.roomId };
+  return { targetType: "user", targetId: src.userId };
+}
+
+if (text === "debug-start") {
+  const { targetType, targetId } = getTarget_(event);
+
+  const mem = userState.get(targetId)?.startISO || "(none)";
+  const sheet = await getStartISOFromSheet(targetType, targetId); // 下面我給你函式
+
+  // 把 sheet 回來的值塞回記憶體（如果有）
+  if (sheet) userState.set(targetId, { startISO: sheet });
+
+  return replyText(
+    event.replyToken,
+    `today=${getTodayISO_TW()}\n` +
+    `targetType=${targetType}\n` +
+    `targetId=${targetId}\n` +
+    `startISO(mem)=${mem}\n` +
+    `startISO(sheet)=${sheet || "(none)"}`
+  );
+}
 
     if (text === "debug-sheet") {
   const src = event.source || {};
