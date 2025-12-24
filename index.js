@@ -1,10 +1,14 @@
-const fetch = require("node-fetch");
+// index.js (Render)
+// Supports: user / group / room
+// - store startISO in Google Sheet via Apps Script WebApp (GAS)
+// - fallback to in-memory Map (Render free instance can reboot)
+// - commands: 開始 / 重新開始 / 第12天 / 今天菜單 / 陪伴提醒 / 07:45..20:00 / debug-start / debug-sheet / 狀態
+
+const fetch = require("node-fetch"); // v2
 const express = require("express");
 const line = require("@line/bot-sdk");
 const fs = require("fs");
 const path = require("path");
-
-
 
 // ===== LINE config (from Render env vars) =====
 const config = {
@@ -12,18 +16,16 @@ const config = {
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
 };
 
+if (!config.channelSecret || !config.channelAccessToken) {
+  console.log("[BOOT][WARN] Missing LINE_CHANNEL_SECRET or LINE_CHANNEL_ACCESS_TOKEN");
+}
+
 const app = express();
 const client = new line.messagingApi.MessagingApiClient({
   channelAccessToken: config.channelAccessToken,
 });
 
-// ===== Load knowledge files =====
-function loadJSON(relPath) {
-  const full = path.join(__dirname, relPath);
-  return JSON.parse(fs.readFileSync(full, "utf8"));
-}
-
-// ✅ 用「安全載入」：讀不到也不會整個掛掉（會在 Render Logs 印錯）
+// ===== Load knowledge files (local) =====
 function safeLoadJSON(relPath, fallback) {
   try {
     const full = path.join(__dirname, relPath);
@@ -38,7 +40,6 @@ function safeLoadJSON(relPath, fallback) {
   }
 }
 
-// ✅ 真正把 knowledge 檔案讀進來（你原本缺少的就是這段）
 const dayTypeMap = safeLoadJSON("knowledge/day_type_map.json", {});
 const menuDetails = safeLoadJSON("knowledge/menu_details_by_day_type.json", {});
 const pushTemplates = safeLoadJSON("knowledge/push_templates.json", {});
@@ -46,11 +47,11 @@ const companionByDay = safeLoadJSON("knowledge/companion_by_day.json", {});
 const faqJSON = safeLoadJSON("knowledge/faq_50.json", { items: [] });
 const faqItems = Array.isArray(faqJSON.items) ? faqJSON.items : [];
 
-// ===== In-memory user state (MVP) =====
-// ⚠ Render 免費版/重啟會清空。正式版建議接 Google Sheet/DB。
-const targetId = new Map(); // targetId -> { startISO: "YYYY-MM-DD" }
+// ===== In-memory state (per targetId) =====
+// key: targetId (string) => { startISO: "YYYY-MM-DD" }
+const stateMap = new Map();
 
-// ===== Helpers =====
+// ===== Helpers: Time (Taipei) =====
 function getTodayISO_TW() {
   const d = new Date();
   const tw = new Date(d.toLocaleString("en-US", { timeZone: "Asia/Taipei" }));
@@ -61,7 +62,6 @@ function getTodayISO_TW() {
 }
 
 function daysBetweenISO(startISO, todayISO) {
-  // 用「台灣時區」的日期差，避免 UTC 差一天
   const start = new Date(startISO + "T00:00:00");
   const today = new Date(todayISO + "T00:00:00");
   const diff = today.getTime() - start.getTime();
@@ -90,8 +90,18 @@ function dayTypeLabel(dt) {
   return map[dt] || dt;
 }
 
+// ===== Target (user/group/room) =====
+function getTarget_(event) {
+  const src = event.source || {};
+  // src.type: "user" | "group" | "room"
+  if (src.type === "group") return { targetType: "group", targetId: src.groupId };
+  if (src.type === "room") return { targetType: "room", targetId: src.roomId };
+  return { targetType: "user", targetId: src.userId };
+}
+
+// ===== State -> current day =====
 function getCurrentDayAndType(targetId) {
-  const st = targetId.get(targetId);
+  const st = stateMap.get(targetId);
   if (!st?.startISO) return null;
 
   const todayISO = getTodayISO_TW();
@@ -99,32 +109,19 @@ function getCurrentDayAndType(targetId) {
   const dayType = resolveDayType(day);
   return { day, dayType };
 }
+
 function getSafeCurrentDayAndType(targetId) {
   const cur = getCurrentDayAndType(targetId);
   if (!cur) return null;
-
-  // 防止 day 變 NaN 或不合理
   if (!Number.isFinite(cur.day) || cur.day < 1 || cur.day > 45) return null;
-
-  // 防止 dayType 空值
   if (!cur.dayType) return null;
-
   return cur;
 }
 
-function parseDayFromText(text) {
-  const m = (text || "").match(/(\d{1,2})/);
-  if (!m) return null;
-  const n = parseInt(m[1], 10);
-  if (Number.isNaN(n) || n < 1 || n > 45) return null;
-  return n;
-}
-
+// ===== Parse / manual day align =====
 function buildStartISOFromDayInput(inputDay) {
-  // 反推起始日：start = today - (inputDay - 1)
   const todayISO = getTodayISO_TW();
   const today = new Date(todayISO + "T00:00:00");
-
   const start = new Date(today);
   start.setDate(start.getDate() - (inputDay - 1));
 
@@ -134,6 +131,7 @@ function buildStartISOFromDayInput(inputDay) {
   return `${yyyy}-${mm}-${dd}`;
 }
 
+// ===== FAQ simple matcher =====
 function normalizeText(s) {
   return (s || "")
     .toLowerCase()
@@ -169,12 +167,9 @@ function matchFAQ(text) {
     if (!Array.isArray(kws) || !item.answer) continue;
 
     let score = 0;
-
     for (const kwRaw of kws) {
       const kw = applySynonyms(normalizeText(kwRaw));
       if (!kw) continue;
-
-      // 越長的 keyword 分數越高，避免短字亂命中
       if (t.includes(kw)) score += Math.min(3, Math.ceil(kw.length / 2));
     }
 
@@ -184,19 +179,18 @@ function matchFAQ(text) {
     }
   }
 
-    // ✅ 門檻：至少 1 分就回
   return bestScore >= 1 ? bestAns : null;
 }
 
 function helpText() {
   return (
     "你可以這樣說 😊\n" +
-    "1) 回「開始」：我會從今天幫你記錄 45 天進度\n" +
-    "2) 回「第12天」：如果你已經在進行中，我可以直接對齊進度\n" +
-    "3) 回「今天菜單」或「今天是哪一天」：我會告訴你今天第幾天＋日型＋重點提醒\n" +
+    "1) 回「開始」：我會從今天幫你記錄 45 天進度（群組/1對1都可）\n" +
+    "2) 回「第12天」：我可以直接對齊進度\n" +
+    "3) 回「今天菜單」或「今天是哪一天」：我會告訴你今天第幾天＋日型＋重點\n" +
     "4) 回任一時間（如 08:00 / 12:00 / 18:00）：我回該時段菜單細節\n" +
     "5) 回「陪伴提醒」：我送你今天專屬的一句鼓勵\n" +
-    "也可以直接問外食、份量、嘴饞怎麼辦等問題"
+    "Debug：debug-start / debug-sheet"
   );
 }
 
@@ -206,11 +200,27 @@ async function replyText(replyToken, text) {
     messages: [{ type: "text", text }],
   });
 }
+
+// ===== GAS (Google Apps Script WebApp) =====
+// ENV required on Render:
+// - GAS_URL: https://script.google.com/macros/s/xxxx/exec
+// - GAS_KEY: same as Script Properties SECRET_KEY in GAS
+
+function getGASEnv_() {
+  const base = process.env.GAS_URL;
+  const key = process.env.GAS_KEY;
+  if (!base || !key) return null;
+  return { base, key };
+}
+
 async function upsertTargetToSheet(targetType, targetId, startISO) {
   try {
-    const base = process.env.GAS_URL;
-    const key  = process.env.GAS_KEY;
-    if (!base || !key) return;
+    const env = getGASEnv_();
+    if (!env) {
+      console.log("[WARN] GAS_URL or GAS_KEY missing");
+      return;
+    }
+    const { base, key } = env;
 
     const qs = new URLSearchParams({ key, startISO });
 
@@ -221,7 +231,7 @@ async function upsertTargetToSheet(targetType, targetId, startISO) {
     const url = `${base}?${qs.toString()}`;
     const r = await fetch(url);
     const txt = (await r.text()).trim();
-    console.log("[GAS UPSERT]", { url, status: r.status, txt });
+    console.log("[GAS UPSERT]", { status: r.status, txt });
   } catch (e) {
     console.log("[WARN] upsertTargetToSheet failed:", e.message);
   }
@@ -229,9 +239,9 @@ async function upsertTargetToSheet(targetType, targetId, startISO) {
 
 async function getStartISOFromSheet(targetType, targetId) {
   try {
-    const base = process.env.GAS_URL;
-    const key = process.env.GAS_KEY;
-    if (!base || !key) return null;
+    const env = getGASEnv_();
+    if (!env) return null;
+    const { base, key } = env;
 
     const qs = new URLSearchParams({ action: "get", key });
 
@@ -243,8 +253,7 @@ async function getStartISOFromSheet(targetType, targetId) {
     const r = await fetch(url);
     const txt = (await r.text()).trim();
 
-    // 為了 debug 建議你先 log 原文（超重要）
-    console.log("[GAS GET]", { url, status: r.status, txt });
+    console.log("[GAS GET]", { status: r.status, txt });
 
     if (!/^\d{4}-\d{2}-\d{2}$/.test(txt)) return null;
     return txt;
@@ -254,18 +263,17 @@ async function getStartISOFromSheet(targetType, targetId) {
   }
 }
 
-async function ensureStartISO(targetId) {
-  const inMem = targetId.get(targetId)?.startISO;
+async function ensureStartISO(targetType, targetId) {
+  const inMem = stateMap.get(targetId)?.startISO;
   if (inMem) return inMem;
 
-  const fromSheet = await getUserStartISOFromSheet(targetId);
+  const fromSheet = await getStartISOFromSheet(targetType, targetId);
   if (fromSheet) {
-    targetId.set(targetId, { startISO: fromSheet });
+    stateMap.set(targetId, { startISO: fromSheet });
     return fromSheet;
   }
   return null;
 }
-
 
 // ===== Webhook =====
 app.post("/webhook", line.middleware(config), async (req, res) => {
@@ -287,10 +295,7 @@ app.get("/", (req, res) => {
 async function handleEvent(event) {
   try {
     if (event.type !== "message" || event.message.type !== "text") return;
-    
-    const source = event.source || {};
-    const targetId = source.groupId || source.roomId || source.userId; // 群組>多人>個人
-    const targetType = source.groupId ? "group" : source.roomId ? "room" : "user";
+
     const { targetType, targetId } = getTarget_(event);
     const text = (event.message.text || "").trim();
 
@@ -301,128 +306,104 @@ async function handleEvent(event) {
       return replyText(event.replyToken, helpText());
     }
 
+    // Status
     if (text === "狀態") {
       return replyText(
         event.replyToken,
-        `today=${getTodayISO_TW()} | FAQ=${faqItems.length} | dayTypeMap=${Object.keys(dayTypeMap||{}).length} | menuTypes=${Object.keys(menuDetails||{}).length}`
+        `today=${getTodayISO_TW()} | FAQ=${faqItems.length} | dayTypeMap=${Object.keys(dayTypeMap || {}).length} | menuTypes=${Object.keys(menuDetails || {}).length}`
       );
     }
 
-function getTarget_(event) {
-  const src = event.source || {};
-  if (src.type === "group") return { targetType: "group", targetId: src.groupId };
-  if (src.type === "room")  return { targetType: "room",  targetId: src.roomId };
-  return { targetType: "user", targetId: src.userId };
-}
+    // Debug: show mem + sheet
+    if (text === "debug-start") {
+      const mem = stateMap.get(targetId)?.startISO || "(none)";
+      const sheet = await getStartISOFromSheet(targetType, targetId);
+      if (sheet) stateMap.set(targetId, { startISO: sheet });
 
-if (text === "debug-start") {
-  const { targetType, targetId } = getTarget_(event);
+      return replyText(
+        event.replyToken,
+        `today=${getTodayISO_TW()}\n` +
+          `targetType=${targetType}\n` +
+          `targetId=${targetId}\n` +
+          `startISO(mem)=${mem}\n` +
+          `startISO(sheet)=${sheet || "(none)"}`
+      );
+    }
 
-  const mem = targetId.get(targetId)?.startISO || "(none)";
-  const sheet = await getStartISOFromSheet(targetType, targetId); // 下面我給你函式
-
-  // 把 sheet 回來的值塞回記憶體（如果有）
-  if (sheet) targetId.set(targetId, { startISO: sheet });
-
-  return replyText(
-    event.replyToken,
-    `today=${getTodayISO_TW()}\n` +
-    `targetType=${targetType}\n` +
-    `targetId=${targetId}\n` +
-    `startISO(mem)=${mem}\n` +
-    `startISO(sheet)=${sheet || "(none)"}`
-  );
-}
-
+    // Debug: raw sheet check (same as debug-start but shorter)
     if (text === "debug-sheet") {
-  const src = event.source || {};
-  const params =
-    src.type === "group"
-      ? { groupId: src.groupId }
-      : src.type === "room"
-      ? { roomId: src.roomId }
-      : { userId: src.userId };
-
-  const out = await getStartISOFromSheetRaw(params);
-  return replyText(event.replyToken, `status=${out.status}\ntext=${out.text}`);
-}
-
+      const sheet = await getStartISOFromSheet(targetType, targetId);
+      return replyText(event.replyToken, `sheetStartISO=${sheet || "none"}`);
+    }
 
     // Start
     if (text === "開始" || text.toLowerCase() === "start") {
-  // 先確認是否已經開始（記憶體 or Sheet）
-  const startISO = await ensureStartISO(targetId);
+      const existing = await ensureStartISO(targetType, targetId);
 
-  if (startISO) {
-    await upsertTargetToSheet(targetType, targetId, todayISO);
-    const cur = getSafeCurrentDayAndType(targetId);
-    
-    return replyText(
-      event.replyToken,
-      `你已經在進行中囉 😊\n` +
-      `今天是【第 ${cur.day} 天・${dayTypeLabel(cur.dayType)}】\n\n` +
-      `如果你真的想重新從第 1 天開始，請回我「重新開始」。`
-    );
-  }
+      if (existing) {
+        const cur = getSafeCurrentDayAndType(targetId);
+        return replyText(
+          event.replyToken,
+          `你已經在進行中囉 😊\n` +
+            `今天是【第 ${cur.day} 天・${dayTypeLabel(cur.dayType)}】\n\n` +
+            `如果你真的想重新從第 1 天開始，請回我「重新開始」。`
+        );
+      }
 
-  // 沒開始過，才建立新的 startISO
-  const todayISO = getTodayISO_TW();
-  targetId.set(targetId, { startISO: todayISO });
-  await upsertUserToSheet(targetId, todayISO);
+      const todayISO = getTodayISO_TW();
+      stateMap.set(targetId, { startISO: todayISO });
+      await upsertTargetToSheet(targetType, targetId, todayISO);
 
-  const day = 1;
-  const dayType = resolveDayType(day);
-  const companion = companionByDay[String(day)] || "第一天最重要的不是完美，而是開始。";
+      const day = 1;
+      const dayType = resolveDayType(day);
+      const companion = companionByDay[String(day)] || "第一天最重要的不是完美，而是開始。";
 
-  return replyText(
-    event.replyToken,
-    `已幫你從今天開始 ✅\n` +
-    `今天是【第 ${day} 天・${dayTypeLabel(dayType)}】\n\n` +
-    `💛 今日陪伴：${companion}`
-  );
-}
+      return replyText(
+        event.replyToken,
+        `已幫你從今天開始 ✅\n` +
+          `今天是【第 ${day} 天・${dayTypeLabel(dayType)}】\n\n` +
+          `💛 今日陪伴：${companion}`
+      );
+    }
 
+    // Restart
+    if (text === "重新開始") {
+      const todayISO = getTodayISO_TW();
+      stateMap.set(targetId, { startISO: todayISO });
+      await upsertTargetToSheet(targetType, targetId, todayISO);
 
-if (text === "重新開始") {
-  const todayISO = getTodayISO_TW();
-  targetId.set(targetId, { startISO: todayISO });
-  await upsertUserToSheet(targetId, todayISO);
+      return replyText(
+        event.replyToken,
+        "好，我已幫你重新從第 1 天開始 😊\n今天不用完美，我會陪你一起走。"
+      );
+    }
 
-  return replyText(
-    event.replyToken,
-    "好，我已幫你重新從第 1 天開始 😊\n今天不用完美，我會陪你一起走。"
-  );
-}
+    // Manual day: 第12天
+    const manualDayMatch = text.match(/^第\s*(\d{1,2})\s*天$/);
+    if (manualDayMatch) {
+      const inputDay = parseInt(manualDayMatch[1], 10);
+      if (!Number.isFinite(inputDay) || inputDay < 1 || inputDay > 45) {
+        return replyText(event.replyToken, "天數請輸入 1～45 之間 😊");
+      }
 
-    // Set day manually
-   const manualDayMatch = text.match(/^第\s*(\d{1,2})\s*天$/);
+      const startISO = buildStartISOFromDayInput(inputDay);
+      stateMap.set(targetId, { startISO });
+      await upsertTargetToSheet(targetType, targetId, startISO);
 
-if (manualDayMatch) {
-  const inputDay = parseInt(manualDayMatch[1], 10);
+      const dayType = resolveDayType(inputDay);
+      const companion = companionByDay[String(inputDay)] || "我們一步一步來就好 😊";
 
-  if (inputDay < 1 || inputDay > 45) {
-    return replyText(event.replyToken, "天數請輸入 1～45 之間 😊");
-  }
+      return replyText(
+        event.replyToken,
+        `好，我已幫你對齊進度 ✅\n` +
+          `今天是【第 ${inputDay} 天・${dayTypeLabel(dayType)}】\n\n` +
+          `💛 今日陪伴：${companion}`
+      );
+    }
 
-  const startISO = buildStartISOFromDayInput(inputDay);
-  targetId.set(targetId, { startISO });
-  await upsertUserToSheet(targetId, startISO);
-
-  const dayType = resolveDayType(inputDay);
-  const companion = companionByDay[String(inputDay)] || "我們一步一步來就好 😊";
-
-  return replyText(
-    event.replyToken,
-    `好，我已幫你對齊進度 ✅\n` +
-    `今天是【第 ${inputDay} 天・${dayTypeLabel(dayType)}】\n\n` +
-    `💛 今日陪伴：${companion}`
-  );
-}
-
-
-    // Today menu summary (包含「今天是哪一天」)
+    // Today menu summary
     if (text === "今天菜單" || text === "今日菜單" || text.includes("今天是哪一天") || text === "今天是哪天") {
-      await ensureStartISO(targetId);
+      await ensureStartISO(targetType, targetId);
       const cur = getSafeCurrentDayAndType(targetId);
 
       if (!cur) {
@@ -431,6 +412,7 @@ if (manualDayMatch) {
           "我可以幫你算今天第幾天與日型 😊\n請先回我「開始」，或告訴我你目前是第幾天（例如：第12天）。"
         );
       }
+
       const companion = companionByDay[String(cur.day)] || "今天不用完美，方向對就很好 😊";
       const msg =
         `今天是【第 ${cur.day} 天・${dayTypeLabel(cur.dayType)}】\n` +
@@ -442,7 +424,7 @@ if (manualDayMatch) {
 
     // Companion reminder
     if (text === "陪伴提醒" || text === "鼓勵我" || text === "提醒我") {
-      await ensureStartISO(targetId);
+      await ensureStartISO(targetType, targetId);
       const cur = getSafeCurrentDayAndType(targetId);
 
       if (!cur) {
@@ -455,10 +437,10 @@ if (manualDayMatch) {
       return replyText(event.replyToken, companion);
     }
 
-    // Time-slot menu details
+    // Time-slot details
     const timeMatch = text.match(/(07:45|08:00|10:00|11:45|12:00|14:00|16:00|17:45|18:00|20:00)/);
     if (timeMatch) {
-      await ensureStartISO(targetId);
+      await ensureStartISO(targetType, targetId);
       const cur = getSafeCurrentDayAndType(targetId);
 
       if (!cur) {
@@ -467,35 +449,19 @@ if (manualDayMatch) {
           "我可以給你該時段菜單 😊\n請先回我「開始」，或告訴我你目前是第幾天（例如：第12天）。"
         );
       }
+
       const t = timeMatch[1];
-      const slot = menuDetails[cur.dayType]?.[t];
+      const slot = menuDetails?.[cur.dayType]?.[t];
       if (!slot) {
         return replyText(
           event.replyToken,
           `我查到你今天是【${dayTypeLabel(cur.dayType)}】，但目前這個時段沒有細節。\n你可以改問「今天菜單」。`
         );
       }
+
       const msg = `【第 ${cur.day} 天・${dayTypeLabel(cur.dayType)}】\n⏰ ${t}\n${slot}`;
       return replyText(event.replyToken, msg);
     }
-
-    if (text.startsWith("FAQ測試")) {
-  const q = text.replace("FAQ測試", "").trim();
-  const t = applySynonyms(normalizeText(q));
-  let best = { score: 0, ans: null, id: null };
-
-  for (const item of faqItems || []) {
-    let score = 0;
-    for (const kwRaw of item.keywords || []) {
-      const kw = applySynonyms(normalizeText(kwRaw));
-      if (kw && t.includes(kw)) score += Math.min(3, Math.ceil(kw.length / 2));
-    }
-    if (score > best.score) best = { score, ans: item.answer, id: item.id };
-  }
-
-  return replyText(event.replyToken, `Q=${q}\nscore=${best.score}\nid=${best.id}\nans=${best.ans || "(no match)"}`);
-}
-
 
     // FAQ
     const faqAns = matchFAQ(text);
@@ -513,10 +479,9 @@ if (manualDayMatch) {
     );
   } catch (err) {
     console.error("HANDLE EVENT ERROR:", err);
-    // 不要讓錯誤導致 webhook 整批失敗；也避免無回應
     try {
       if (event?.replyToken) {
-        await replyText(event.replyToken, "我剛剛處理時遇到小問題，我已經記錄起來了。你可以再傳一次「開始」😊");
+        await replyText(event.replyToken, "我剛剛處理時遇到小問題，你可以再傳一次「開始」😊");
       }
     } catch (e2) {
       console.error("REPLY FAIL:", e2);
@@ -531,14 +496,6 @@ app.listen(port, () => {
   console.log("Server started on port", port);
   console.log("[BOOT] FAQ items =", faqItems.length);
   console.log("[BOOT] dayTypeMap keys =", Object.keys(dayTypeMap || {}).length);
+  console.log("[BOOT] GAS_URL set =", !!process.env.GAS_URL);
+  console.log("[BOOT] GAS_KEY set =", !!process.env.GAS_KEY);
 });
-
-
-
-
-
-
-
-
-
-
