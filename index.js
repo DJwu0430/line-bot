@@ -227,25 +227,19 @@ async function upsertUserToSheet(targetId, startISO) {
     console.log("[WARN] upsertUserToSheet failed:", e.message);
   }
 }
-async function getUserStartISOFromSheet(targetId) {
-  try {
-    const base = process.env.GAS_URL;
-    const key = process.env.GAS_KEY;
-    if (!base || !key) return null;
+async function getStartISOFromSheetRaw(params) {
+  const base = process.env.GAS_URL;
+  const key = process.env.GAS_KEY;
+  if (!base || !key) return { status: 0, text: "(missing GAS_URL/GAS_KEY)" };
 
-    const url =
-      `${base}?action=get&key=${encodeURIComponent(key)}` +
-      `&targetId=${encodeURIComponent(targetId)}`;
+  const qs = new URLSearchParams({ action: "get", key, ...params });
+  const url = `${base}?${qs.toString()}`;
 
-    const r = await fetch(url);
-    const txt = (await r.text()).trim(); // 例如回傳 2025-12-24 或 "none"
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(txt)) return null;
-    return txt;
-  } catch (e) {
-    console.log("[WARN] getUserStartISOFromSheet failed:", e.message);
-    return null;
-  }
+  const r = await fetch(url);
+  const text = (await r.text()).trim();
+  return { status: r.status, text, url };
 }
+
 async function ensureStartISO(targetId) {
   const inMem = userState.get(targetId)?.startISO;
   if (inMem) return inMem;
@@ -312,14 +306,18 @@ async function handleEvent(event) {
     }
 
     if (text === "debug-sheet") {
-      const s = await getUserStartISOFromSheet(targetId);
-      return replyText(
-        event.replyToken,
-        `targetType=${targetType}\n` +
-        `targetId=${targetId}\n` +
-        `sheetStartISO=${s || "(none)"}`
-      );
-    }
+  const src = event.source || {};
+  const params =
+    src.type === "group"
+      ? { groupId: src.groupId }
+      : src.type === "room"
+      ? { roomId: src.roomId }
+      : { userId: src.userId };
+
+  const out = await getStartISOFromSheetRaw(params);
+  return replyText(event.replyToken, `status=${out.status}\ntext=${out.text}`);
+}
+
 
     // Start
     if (text === "開始" || text.toLowerCase() === "start") {
@@ -504,6 +502,7 @@ app.listen(port, () => {
   console.log("[BOOT] FAQ items =", faqItems.length);
   console.log("[BOOT] dayTypeMap keys =", Object.keys(dayTypeMap || {}).length);
 });
+
 
 
 
