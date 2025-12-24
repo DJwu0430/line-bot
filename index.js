@@ -48,7 +48,7 @@ const faqItems = Array.isArray(faqJSON.items) ? faqJSON.items : [];
 
 // ===== In-memory user state (MVP) =====
 // ⚠ Render 免費版/重啟會清空。正式版建議接 Google Sheet/DB。
-const userState = new Map(); // targetId -> { startISO: "YYYY-MM-DD" }
+const targetId = new Map(); // targetId -> { startISO: "YYYY-MM-DD" }
 
 // ===== Helpers =====
 function getTodayISO_TW() {
@@ -91,7 +91,7 @@ function dayTypeLabel(dt) {
 }
 
 function getCurrentDayAndType(targetId) {
-  const st = userState.get(targetId);
+  const st = targetId.get(targetId);
   if (!st?.startISO) return null;
 
   const todayISO = getTodayISO_TW();
@@ -206,27 +206,27 @@ async function replyText(replyToken, text) {
     messages: [{ type: "text", text }],
   });
 }
-async function upsertUserToSheet(targetId, startISO) {
+async function upsertTargetToSheet(targetType, targetId, startISO) {
   try {
-    const base = process.env.GAS_URL; // https://script.google.com/macros/s/AKfycbwntXKiniu3AGLZFSqPW6pY4UoEkKqX1rDbIUZloRmpY-fO33B3Sgg-Wo-sTgal2oA5/exec
-    const key = process.env.GAS_KEY;  // linebot_2025_secret_h.p.o
-    if (!base || !key) {
-      console.log("[WARN] GAS_URL or GAS_KEY missing");
-      return;
-    }
+    const base = process.env.GAS_URL;
+    const key  = process.env.GAS_KEY;
+    if (!base || !key) return;
 
-    const url =
-      `${base}?key=${encodeURIComponent(key)}` +
-      `&targetId=${encodeURIComponent(targetId)}` +
-      `&startISO=${encodeURIComponent(startISO)}`;
+    const qs = new URLSearchParams({ key, startISO });
 
-    const r = await fetch(url, { method: "GET" });
-    const txt = await r.text();
-    console.log("[GAS] status=", r.status, "body=", txt.slice(0, 120));
+    if (targetType === "group") qs.set("groupId", targetId);
+    else if (targetType === "room") qs.set("roomId", targetId);
+    else qs.set("userId", targetId);
+
+    const url = `${base}?${qs.toString()}`;
+    const r = await fetch(url);
+    const txt = (await r.text()).trim();
+    console.log("[GAS UPSERT]", { url, status: r.status, txt });
   } catch (e) {
-    console.log("[WARN] upsertUserToSheet failed:", e.message);
+    console.log("[WARN] upsertTargetToSheet failed:", e.message);
   }
 }
+
 async function getStartISOFromSheet(targetType, targetId) {
   try {
     const base = process.env.GAS_URL;
@@ -255,12 +255,12 @@ async function getStartISOFromSheet(targetType, targetId) {
 }
 
 async function ensureStartISO(targetId) {
-  const inMem = userState.get(targetId)?.startISO;
+  const inMem = targetId.get(targetId)?.startISO;
   if (inMem) return inMem;
 
   const fromSheet = await getUserStartISOFromSheet(targetId);
   if (fromSheet) {
-    userState.set(targetId, { startISO: fromSheet });
+    targetId.set(targetId, { startISO: fromSheet });
     return fromSheet;
   }
   return null;
@@ -287,11 +287,11 @@ app.get("/", (req, res) => {
 async function handleEvent(event) {
   try {
     if (event.type !== "message" || event.message.type !== "text") return;
-
+    
     const source = event.source || {};
     const targetId = source.groupId || source.roomId || source.userId; // 群組>多人>個人
     const targetType = source.groupId ? "group" : source.roomId ? "room" : "user";
-
+    const { targetType, targetId } = getTarget_(event);
     const text = (event.message.text || "").trim();
 
     console.log("[MSG]", { text, targetType, targetId });
@@ -318,11 +318,11 @@ function getTarget_(event) {
 if (text === "debug-start") {
   const { targetType, targetId } = getTarget_(event);
 
-  const mem = userState.get(targetId)?.startISO || "(none)";
+  const mem = targetId.get(targetId)?.startISO || "(none)";
   const sheet = await getStartISOFromSheet(targetType, targetId); // 下面我給你函式
 
   // 把 sheet 回來的值塞回記憶體（如果有）
-  if (sheet) userState.set(targetId, { startISO: sheet });
+  if (sheet) targetId.set(targetId, { startISO: sheet });
 
   return replyText(
     event.replyToken,
@@ -354,8 +354,9 @@ if (text === "debug-start") {
   const startISO = await ensureStartISO(targetId);
 
   if (startISO) {
+    await upsertTargetToSheet(targetType, targetId, todayISO);
     const cur = getSafeCurrentDayAndType(targetId);
-
+    
     return replyText(
       event.replyToken,
       `你已經在進行中囉 😊\n` +
@@ -366,7 +367,7 @@ if (text === "debug-start") {
 
   // 沒開始過，才建立新的 startISO
   const todayISO = getTodayISO_TW();
-  userState.set(targetId, { startISO: todayISO });
+  targetId.set(targetId, { startISO: todayISO });
   await upsertUserToSheet(targetId, todayISO);
 
   const day = 1;
@@ -384,7 +385,7 @@ if (text === "debug-start") {
 
 if (text === "重新開始") {
   const todayISO = getTodayISO_TW();
-  userState.set(targetId, { startISO: todayISO });
+  targetId.set(targetId, { startISO: todayISO });
   await upsertUserToSheet(targetId, todayISO);
 
   return replyText(
@@ -404,7 +405,7 @@ if (manualDayMatch) {
   }
 
   const startISO = buildStartISOFromDayInput(inputDay);
-  userState.set(targetId, { startISO });
+  targetId.set(targetId, { startISO });
   await upsertUserToSheet(targetId, startISO);
 
   const dayType = resolveDayType(inputDay);
@@ -531,6 +532,7 @@ app.listen(port, () => {
   console.log("[BOOT] FAQ items =", faqItems.length);
   console.log("[BOOT] dayTypeMap keys =", Object.keys(dayTypeMap || {}).length);
 });
+
 
 
 
