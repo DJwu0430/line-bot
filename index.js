@@ -48,7 +48,7 @@ const faqItems = Array.isArray(faqJSON.items) ? faqJSON.items : [];
 
 // ===== In-memory user state (MVP) =====
 // ⚠ Render 免費版/重啟會清空。正式版建議接 Google Sheet/DB。
-const userState = new Map(); // userId -> { startISO: "YYYY-MM-DD" }
+const userState = new Map(); // targetId -> { startISO: "YYYY-MM-DD" }
 
 // ===== Helpers =====
 function getTodayISO_TW() {
@@ -90,8 +90,8 @@ function dayTypeLabel(dt) {
   return map[dt] || dt;
 }
 
-function getCurrentDayAndType(userId) {
-  const st = userState.get(userId);
+function getCurrentDayAndType(targetId) {
+  const st = userState.get(targetId);
   if (!st?.startISO) return null;
 
   const todayISO = getTodayISO_TW();
@@ -99,8 +99,8 @@ function getCurrentDayAndType(userId) {
   const dayType = resolveDayType(day);
   return { day, dayType };
 }
-function getSafeCurrentDayAndType(userId) {
-  const cur = getCurrentDayAndType(userId);
+function getSafeCurrentDayAndType(targetId) {
+  const cur = getCurrentDayAndType(targetId);
   if (!cur) return null;
 
   // 防止 day 變 NaN 或不合理
@@ -206,10 +206,10 @@ async function replyText(replyToken, text) {
     messages: [{ type: "text", text }],
   });
 }
-async function upsertUserToSheet(userId, startISO) {
+async function upsertUserToSheet(targetId, startISO) {
   try {
     const base = process.env.GAS_URL; // https://script.google.com/macros/s/AKfycbwntXKiniu3AGLZFSqPW6pY4UoEkKqX1rDbIUZloRmpY-fO33B3Sgg-Wo-sTgal2oA5/exec
-    const key = process.env.GAS_KEY;  // linebot_2025_secret_h.p.oY
+    const key = process.env.GAS_KEY;  // linebot_2025_secret_h.p.o
     if (!base || !key) {
       console.log("[WARN] GAS_URL or GAS_KEY missing");
       return;
@@ -217,7 +217,7 @@ async function upsertUserToSheet(userId, startISO) {
 
     const url =
       `${base}?key=${encodeURIComponent(key)}` +
-      `&userId=${encodeURIComponent(userId)}` +
+      `&targetId=${encodeURIComponent(targetId)}` +
       `&startISO=${encodeURIComponent(startISO)}`;
 
     const r = await fetch(url, { method: "GET" });
@@ -227,7 +227,7 @@ async function upsertUserToSheet(userId, startISO) {
     console.log("[WARN] upsertUserToSheet failed:", e.message);
   }
 }
-async function getUserStartISOFromSheet(userId) {
+async function getUserStartISOFromSheet(targetId) {
   try {
     const base = process.env.GAS_URL;
     const key = process.env.GAS_KEY;
@@ -235,7 +235,7 @@ async function getUserStartISOFromSheet(userId) {
 
     const url =
       `${base}?action=get&key=${encodeURIComponent(key)}` +
-      `&userId=${encodeURIComponent(userId)}`;
+      `&targetId=${encodeURIComponent(targetId)}`;
 
     const r = await fetch(url);
     const txt = (await r.text()).trim(); // 例如回傳 2025-12-24 或 "none"
@@ -246,13 +246,13 @@ async function getUserStartISOFromSheet(userId) {
     return null;
   }
 }
-async function ensureStartISO(userId) {
-  const inMem = userState.get(userId)?.startISO;
+async function ensureStartISO(targetId) {
+  const inMem = userState.get(targetId)?.startISO;
   if (inMem) return inMem;
 
-  const fromSheet = await getUserStartISOFromSheet(userId);
+  const fromSheet = await getUserStartISOFromSheet(targetId);
   if (fromSheet) {
-    userState.set(userId, { startISO: fromSheet });
+    userState.set(targetId, { startISO: fromSheet });
     return fromSheet;
   }
   return null;
@@ -280,10 +280,13 @@ async function handleEvent(event) {
   try {
     if (event.type !== "message" || event.message.type !== "text") return;
 
-    const userId = event.source.userId;
+    const source = event.source || {};
+    const targetId = source.groupId || source.roomId || source.userId; // 群組>多人>個人
+    const targetType = source.groupId ? "group" : source.roomId ? "room" : "user";
+
     const text = (event.message.text || "").trim();
 
-    console.log("[MSG]", { text, userId });
+    console.log("[MSG]", { text, targetType, targetId });
 
     // Help
     if (text === "help" || text === "幫助" || text === "使用說明") {
@@ -291,31 +294,40 @@ async function handleEvent(event) {
     }
 
     if (text === "狀態") {
-  return replyText(
-    event.replyToken,
-    `today=${getTodayISO_TW()} | FAQ=${faqItems.length} | dayTypeMap=${Object.keys(dayTypeMap||{}).length} | menuTypes=${Object.keys(menuDetails||{}).length}`
-  );
-}
-if (text === "debug-start") {
-  const st = userState.get(userId);
-  return replyText(
-    event.replyToken,
-    `today=${getTodayISO_TW()}\nstartISO(inMemory)=${st?.startISO || "(none)"}`
-  );
-}
+      return replyText(
+        event.replyToken,
+        `today=${getTodayISO_TW()} | FAQ=${faqItems.length} | dayTypeMap=${Object.keys(dayTypeMap||{}).length} | menuTypes=${Object.keys(menuDetails||{}).length}`
+      );
+    }
 
-if (text === "debug-sheet") {
-  const s = await getUserStartISOFromSheet(userId);
-  return replyText(event.replyToken, `sheetStartISO=${s || "(none)"}`);
-}
+    if (text === "debug-start") {
+      const st = userState.get(targetId);
+      return replyText(
+        event.replyToken,
+        `today=${getTodayISO_TW()}\n` +
+        `targetType=${targetType}\n` +
+        `targetId=${targetId}\n` +
+        `startISO(inMemory)=${st?.startISO || "(none)"}`
+      );
+    }
+
+    if (text === "debug-sheet") {
+      const s = await getUserStartISOFromSheet(targetId);
+      return replyText(
+        event.replyToken,
+        `targetType=${targetType}\n` +
+        `targetId=${targetId}\n` +
+        `sheetStartISO=${s || "(none)"}`
+      );
+    }
 
     // Start
     if (text === "開始" || text.toLowerCase() === "start") {
   // 先確認是否已經開始（記憶體 or Sheet）
-  const startISO = await ensureStartISO(userId);
+  const startISO = await ensureStartISO(targetId);
 
   if (startISO) {
-    const cur = getSafeCurrentDayAndType(userId);
+    const cur = getSafeCurrentDayAndType(targetId);
 
     return replyText(
       event.replyToken,
@@ -327,8 +339,8 @@ if (text === "debug-sheet") {
 
   // 沒開始過，才建立新的 startISO
   const todayISO = getTodayISO_TW();
-  userState.set(userId, { startISO: todayISO });
-  await upsertUserToSheet(userId, todayISO);
+  userState.set(targetId, { startISO: todayISO });
+  await upsertUserToSheet(targetId, todayISO);
 
   const day = 1;
   const dayType = resolveDayType(day);
@@ -345,8 +357,8 @@ if (text === "debug-sheet") {
 
 if (text === "重新開始") {
   const todayISO = getTodayISO_TW();
-  userState.set(userId, { startISO: todayISO });
-  await upsertUserToSheet(userId, todayISO);
+  userState.set(targetId, { startISO: todayISO });
+  await upsertUserToSheet(targetId, todayISO);
 
   return replyText(
     event.replyToken,
@@ -365,8 +377,8 @@ if (manualDayMatch) {
   }
 
   const startISO = buildStartISOFromDayInput(inputDay);
-  userState.set(userId, { startISO });
-  await upsertUserToSheet(userId, startISO);
+  userState.set(targetId, { startISO });
+  await upsertUserToSheet(targetId, startISO);
 
   const dayType = resolveDayType(inputDay);
   const companion = companionByDay[String(inputDay)] || "我們一步一步來就好 😊";
@@ -382,8 +394,8 @@ if (manualDayMatch) {
 
     // Today menu summary (包含「今天是哪一天」)
     if (text === "今天菜單" || text === "今日菜單" || text.includes("今天是哪一天") || text === "今天是哪天") {
-      await ensureStartISO(userId);
-      const cur = getSafeCurrentDayAndType(userId);
+      await ensureStartISO(targetId);
+      const cur = getSafeCurrentDayAndType(targetId);
 
       if (!cur) {
         return replyText(
@@ -402,8 +414,8 @@ if (manualDayMatch) {
 
     // Companion reminder
     if (text === "陪伴提醒" || text === "鼓勵我" || text === "提醒我") {
-      await ensureStartISO(userId);
-      const cur = getSafeCurrentDayAndType(userId);
+      await ensureStartISO(targetId);
+      const cur = getSafeCurrentDayAndType(targetId);
 
       if (!cur) {
         return replyText(
@@ -418,8 +430,8 @@ if (manualDayMatch) {
     // Time-slot menu details
     const timeMatch = text.match(/(07:45|08:00|10:00|11:45|12:00|14:00|16:00|17:45|18:00|20:00)/);
     if (timeMatch) {
-      await ensureStartISO(userId);
-      const cur = getSafeCurrentDayAndType(userId);
+      await ensureStartISO(targetId);
+      const cur = getSafeCurrentDayAndType(targetId);
 
       if (!cur) {
         return replyText(
@@ -492,6 +504,7 @@ app.listen(port, () => {
   console.log("[BOOT] FAQ items =", faqItems.length);
   console.log("[BOOT] dayTypeMap keys =", Object.keys(dayTypeMap || {}).length);
 });
+
 
 
 
