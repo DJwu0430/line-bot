@@ -99,6 +99,18 @@ function getCurrentDayAndType(userId) {
   const dayType = resolveDayType(day);
   return { day, dayType };
 }
+function getSafeCurrentDayAndType(userId) {
+  const cur = getCurrentDayAndType(userId);
+  if (!cur) return null;
+
+  // 防止 day 變 NaN 或不合理
+  if (!Number.isFinite(cur.day) || cur.day < 1 || cur.day > 45) return null;
+
+  // 防止 dayType 空值
+  if (!cur.dayType) return null;
+
+  return cur;
+}
 
 function parseDayFromText(text) {
   const m = (text || "").match(/(\d{1,2})/);
@@ -480,6 +492,7 @@ app.listen(port, () => {
   console.log("[BOOT] FAQ items =", faqItems.length);
   console.log("[BOOT] dayTypeMap keys =", Object.keys(dayTypeMap || {}).length);
 });
+
 
 
 
