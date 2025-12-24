@@ -303,7 +303,8 @@ if (text === "debug-sheet") {
   const startISO = await ensureStartISO(userId);
 
   if (startISO) {
-    const cur = getCurrentDayAndType(userId);
+    const cur = getSafeCurrentDayAndType(userId);
+
     return replyText(
       event.replyToken,
       `你已經在進行中囉 😊\n` +
@@ -370,7 +371,8 @@ if (manualDayMatch) {
     // Today menu summary (包含「今天是哪一天」)
     if (text === "今天菜單" || text === "今日菜單" || text.includes("今天是哪一天") || text === "今天是哪天") {
       await ensureStartISO(userId);
-      const cur = getCurrentDayAndType(userId);
+      const cur = getSafeCurrentDayAndType(userId);
+
       if (!cur) {
         return replyText(
           event.replyToken,
@@ -389,7 +391,8 @@ if (manualDayMatch) {
     // Companion reminder
     if (text === "陪伴提醒" || text === "鼓勵我" || text === "提醒我") {
       await ensureStartISO(userId);
-      const cur = getCurrentDayAndType(userId);
+      const cur = getSafeCurrentDayAndType(userId);
+
       if (!cur) {
         return replyText(
           event.replyToken,
@@ -404,7 +407,8 @@ if (manualDayMatch) {
     const timeMatch = text.match(/(07:45|08:00|10:00|11:45|12:00|14:00|16:00|17:45|18:00|20:00)/);
     if (timeMatch) {
       await ensureStartISO(userId);
-      const cur = getCurrentDayAndType(userId);
+      const cur = getSafeCurrentDayAndType(userId);
+
       if (!cur) {
         return replyText(
           event.replyToken,
@@ -476,6 +480,7 @@ app.listen(port, () => {
   console.log("[BOOT] FAQ items =", faqItems.length);
   console.log("[BOOT] dayTypeMap keys =", Object.keys(dayTypeMap || {}).length);
 });
+
 
 
 
