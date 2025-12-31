@@ -293,20 +293,15 @@ function buildStartISOFromDayInput(inputDay) {
 }
 
 // ===== Webhook =====
-app.post("/webhook", line.middleware(config), (req, res) => {
-  res.sendStatus(200);
-
-  const events = req.body?.events || [];
-  console.log("[WEBHOOK HIT] events =", events.length);
-
-  Promise.allSettled(events.map(handleEvent)).then((results) => {
-    const rejected = results.filter((r) => r.status === "rejected");
-    if (rejected.length) {
-      console.error("[WEBHOOK] rejected count =", rejected.length);
-      for (const r of rejected) console.error(r.reason);
-    }
-  });
+app.post("/webhook", (req, res) => {
+  console.log("[DEBUG] POST /webhook reached");
+  return res.status(200).send("OK");
 });
+app.get("/webhook", (req, res) => {
+  console.log("[DEBUG] GET /webhook reached");
+  return res.status(200).send("GET OK");
+});
+
 
 
 
@@ -485,6 +480,7 @@ app.listen(port, () => {
   console.log("[BOOT] FAQ items =", faqItems.length);
   console.log("[BOOT] dayTypeMap keys =", Object.keys(dayTypeMap || {}).length);
 });
+
 
 
 
