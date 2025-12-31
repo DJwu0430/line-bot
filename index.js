@@ -1,10 +1,22 @@
-import "dotenv/config";
-import OpenAI from "openai";
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+require("dotenv").config();
+
+const OpenAI = require("openai");
+const fetch = require("node-fetch"); // v2
+const express = require("express");
+const line = require("@line/bot-sdk");
+const fs = require("fs");
+const path = require("path");
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
 
 async function aiAnswer(question) {
   const vectorStoreId = process.env.OPENAI_VECTOR_STORE_ID;
-
+  if (!process.env.OPENAI_API_KEY) {
+  console.log("❌ OPENAI_API_KEY missing");
+  }
   if (!vectorStoreId) {
     return "系統尚未設定資料庫（OPENAI_VECTOR_STORE_ID）。";
   }
@@ -34,12 +46,6 @@ async function aiAnswer(question) {
   return resp.output_text || "附件資料沒有提到這件事。";
 }
 
-
-const fetch = require("node-fetch"); // v2
-const express = require("express");
-const line = require("@line/bot-sdk");
-const fs = require("fs");
-const path = require("path");
 
 // ===== LINE config (from Render env vars) =====
 const config = {
@@ -301,20 +307,7 @@ async function handleEvent(event) {
 
     const { targetType, targetId } = getTarget_(event);
     let text = (event.message.text || "").trim();
-    const text = event.message?.text || "";
-
-if (text.startsWith("?")) {
-  const question = text.replace(/^\?\s*/, "");
-  const answer = await aiAnswer(question);
-
-  return client.replyMessage(event.replyToken, {
-    type: "text",
-    text: answer,
-  });
-}
-
-// 不是 ? 開頭 → 完全走你原本健康管理功能
-return handleHealthManagement(event);
+      }
 
     // ===== ✅ 方案B核心：群組/room 只接受 # 指令 =====
     if ((targetType === "group" || targetType === "room") && !text.startsWith("#")) {
@@ -323,6 +316,12 @@ return handleHealthManagement(event);
     if ((targetType === "group" || targetType === "room") && text.startsWith("#")) {
       text = text.slice(1).trim(); // 去掉 # 再走原本邏輯
       if (!text) return;
+    }
+    // ===== ✅ AI 問答模式：? 開頭才走（群組可用 #?）=====
+    if (text.startsWith("?")) {
+      const question = text.replace(/^\?\s*/, "");
+      const answer = await aiAnswer(question);
+      return replyText(event.replyToken, answer); // ✅ 用你已經寫好的 replyText
     }
 
     console.log("[MSG]", { text, targetType, targetId });
@@ -472,4 +471,5 @@ app.listen(port, () => {
   console.log("[BOOT] FAQ items =", faqItems.length);
   console.log("[BOOT] dayTypeMap keys =", Object.keys(dayTypeMap || {}).length);
 });
+
 
