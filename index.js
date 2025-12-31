@@ -58,6 +58,13 @@ app.use(express.json());
 const client = new line.messagingApi.MessagingApiClient({
   channelAccessToken: config.channelAccessToken,
 });
+// 環境變數檢查（不要印出實際值）
+console.log("[ENV CHECK]",
+  "LINE_CHANNEL_SECRET", process.env.LINE_CHANNEL_SECRET ? "SET" : "MISSING",
+  "LINE_CHANNEL_ACCESS_TOKEN", process.env.LINE_CHANNEL_ACCESS_TOKEN ? "SET" : "MISSING",
+  "OPENAI_API_KEY", process.env.OPENAI_API_KEY ? "SET" : "MISSING",
+  "OPENAI_VECTOR_STORE_ID", process.env.OPENAI_VECTOR_STORE_ID ? "SET" : "MISSING"
+);
 
 // ===== Load knowledge files (local) =====
 function safeLoadJSON(relPath, fallback) {
@@ -286,16 +293,23 @@ function buildStartISOFromDayInput(inputDay) {
 }
 
 // ===== Webhook =====
-app.post("/webhook", line.middleware(config), async (req, res) => {
-  try {
-    const events = req.body.events || [];
-    await Promise.all(events.map(handleEvent));
-    res.sendStatus(200);
-  } catch (e) {
-    console.error("Webhook error:", e);
-    res.sendStatus(500);
-  }
+app.post("/webhook", line.middleware(config), (req, res) => {
+  // ✅ 先回 200，讓 LINE Verify 一定過「回應碼」這關
+  res.sendStatus(200);
+
+  const events = req.body?.events || [];
+  console.log("[WEBHOOK HIT] events =", events.length);
+
+  // ✅ 用 allSettled：就算其中一個事件爆炸，也不會影響整體
+  Promise.allSettled(events.map((ev) => handleEvent(ev))).then((results) => {
+    const rejected = results.filter((r) => r.status === "rejected");
+    if (rejected.length) {
+      console.error("[WEBHOOK] rejected count =", rejected.length);
+      for (const r of rejected) console.error(r.reason);
+    }
+  });
 });
+
 
 app.get("/", (req, res) => {
   res.send("LINE Bot is running");
@@ -472,5 +486,6 @@ app.listen(port, () => {
   console.log("[BOOT] FAQ items =", faqItems.length);
   console.log("[BOOT] dayTypeMap keys =", Object.keys(dayTypeMap || {}).length);
 });
+
 
 
