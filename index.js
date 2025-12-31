@@ -1,3 +1,40 @@
+import "dotenv/config";
+import OpenAI from "openai";
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+async function aiAnswer(question) {
+  const vectorStoreId = process.env.OPENAI_VECTOR_STORE_ID;
+
+  if (!vectorStoreId) {
+    return "系統尚未設定資料庫（OPENAI_VECTOR_STORE_ID）。";
+  }
+
+  const resp = await openai.responses.create({
+    model: "gpt-4.1-mini",
+    input: [
+      {
+        role: "system",
+        content:
+          "你是健康管理LINE機器人的問答模式。你只能使用 file_search 找到的附件內容回答。" +
+          "若附件找不到相關資訊，請直接回答：『附件資料沒有提到這件事。』" +
+          "回答語氣中性、確實、像人說話，國中生看得懂。" +
+          "請用條列回答，每一點後面都要加上【引用】。" +
+          "【引用】格式固定為：〔檔名｜摘錄〕（摘錄請用你看到的原文短句，不要自己編）。"
+      },
+      { role: "user", content: question },
+    ],
+    tools: [
+      {
+        type: "file_search",
+        vector_store_ids: [vectorStoreId],
+      },
+    ],
+  });
+
+  return resp.output_text || "附件資料沒有提到這件事。";
+}
+
+
 const fetch = require("node-fetch"); // v2
 const express = require("express");
 const line = require("@line/bot-sdk");
@@ -264,6 +301,20 @@ async function handleEvent(event) {
 
     const { targetType, targetId } = getTarget_(event);
     let text = (event.message.text || "").trim();
+    const text = event.message?.text || "";
+
+if (text.startsWith("?")) {
+  const question = text.replace(/^\?\s*/, "");
+  const answer = await aiAnswer(question);
+
+  return client.replyMessage(event.replyToken, {
+    type: "text",
+    text: answer,
+  });
+}
+
+// 不是 ? 開頭 → 完全走你原本健康管理功能
+return handleHealthManagement(event);
 
     // ===== ✅ 方案B核心：群組/room 只接受 # 指令 =====
     if ((targetType === "group" || targetType === "room") && !text.startsWith("#")) {
@@ -421,3 +472,4 @@ app.listen(port, () => {
   console.log("[BOOT] FAQ items =", faqItems.length);
   console.log("[BOOT] dayTypeMap keys =", Object.keys(dayTypeMap || {}).length);
 });
+
