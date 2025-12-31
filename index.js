@@ -28,7 +28,7 @@ async function aiAnswer(question) {
         role: "system",
         content:
           "你是健康管理LINE機器人的問答模式。你只能使用 file_search 找到的附件內容回答。" +
-          "若附件找不到相關資訊，請直接回答：『附件資料沒有提到這件事。』" +
+          "若附件找不到相關資訊，請直接回答：『附件資料沒有提到這件事。你可以換個問法，或改問「腸道」、「飲食」、「生活習慣」相關內容。』" +
           "回答語氣中性、確實、像人說話，國中生看得懂。" +
           "請用條列回答，每一點後面都要加上【引用】。" +
           "【引用】格式固定為：〔檔名｜摘錄〕（摘錄請用你看到的原文短句，不要自己編）。"
@@ -326,6 +326,12 @@ async function handleEvent(event) {
 
     const { targetType, targetId } = getTarget_(event);
     let text = (event.message.text || "").trim();
+    // ===== UX：統一全形/半形符號（正規化輸入）=====
+text = text
+  .replace(/[？]/g, "?")   // 全形問號 → 半形
+  .replace(/\s+/g, " ")    // 多個空白 → 單一空白
+  .trim();
+
       
 
     // ===== ✅ 方案B核心：群組/room 只接受 # 指令 =====
@@ -336,13 +342,23 @@ async function handleEvent(event) {
       text = text.slice(1).trim(); // 去掉 # 再走原本邏輯
       if (!text) return;
     }
-    // ===== ✅ AI 問答模式：? 開頭才走（群組可用 #?）=====
-    if (text.startsWith("?")) {
-      const question = text.replace(/^\?\s*/, "");
-      const answer = await aiAnswer(question);
-      return replyText(event.replyToken, answer); // ✅ 用你已經寫好的 replyText
-    }
+    // ===== ✅ AI 問答模式：以「請問」開頭才走 =====
+  if (text.startsWith("請問")) {
+  // 把「請問」拿掉，再交給 AI
+  const question = text.replace(/^請問\s*/, "").trim();
 
+  // UX：如果只打「請問」
+  if (!question) {
+    return replyText(
+      event.replyToken,
+      "你可以這樣問我 😊\n例如：\n請問腸道健康跟什麼有關係？"
+    );
+  }
+
+  const answer = await aiAnswer(question);
+  return replyText(event.replyToken, answer);
+  }
+    
     console.log("[MSG]", { text, targetType, targetId });
 
     if (text === "help" || text === "幫助" || text === "使用說明") {
@@ -490,6 +506,7 @@ app.listen(port, () => {
   console.log("[BOOT] FAQ items =", faqItems.length);
   console.log("[BOOT] dayTypeMap keys =", Object.keys(dayTypeMap || {}).length);
 });
+
 
 
 
