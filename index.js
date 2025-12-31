@@ -54,6 +54,7 @@ const config = {
 };
 
 const app = express();
+app.use(express.json()); 
 const client = new line.messagingApi.MessagingApiClient({
   channelAccessToken: config.channelAccessToken,
 });
@@ -307,7 +308,7 @@ async function handleEvent(event) {
 
     const { targetType, targetId } = getTarget_(event);
     let text = (event.message.text || "").trim();
-      }
+      
 
     // ===== ✅ 方案B核心：群組/room 只接受 # 指令 =====
     if ((targetType === "group" || targetType === "room") && !text.startsWith("#")) {
@@ -471,5 +472,6 @@ app.listen(port, () => {
   console.log("[BOOT] FAQ items =", faqItems.length);
   console.log("[BOOT] dayTypeMap keys =", Object.keys(dayTypeMap || {}).length);
 });
+
 
 
