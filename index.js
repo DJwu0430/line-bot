@@ -294,14 +294,12 @@ function buildStartISOFromDayInput(inputDay) {
 
 // ===== Webhook =====
 app.post("/webhook", line.middleware(config), (req, res) => {
-  // ✅ 先回 200，讓 LINE Verify 一定過「回應碼」這關
   res.sendStatus(200);
 
   const events = req.body?.events || [];
   console.log("[WEBHOOK HIT] events =", events.length);
 
-  // ✅ 用 allSettled：就算其中一個事件爆炸，也不會影響整體
-  Promise.allSettled(events.map((ev) => handleEvent(ev))).then((results) => {
+  Promise.allSettled(events.map(handleEvent)).then((results) => {
     const rejected = results.filter((r) => r.status === "rejected");
     if (rejected.length) {
       console.error("[WEBHOOK] rejected count =", rejected.length);
@@ -309,6 +307,7 @@ app.post("/webhook", line.middleware(config), (req, res) => {
     }
   });
 });
+
 
 
 app.get("/", (req, res) => {
@@ -486,6 +485,7 @@ app.listen(port, () => {
   console.log("[BOOT] FAQ items =", faqItems.length);
   console.log("[BOOT] dayTypeMap keys =", Object.keys(dayTypeMap || {}).length);
 });
+
 
 
 
