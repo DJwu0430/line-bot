@@ -226,8 +226,16 @@ async function upsertTargetToSheet(targetType, targetId, startISO) {
       return;
     }
 
-    const qs = new URLSearchParams({ key, startISO });
+    // ✅ 同時送「新參數 + 舊參數」，確保 Apps Script 吃哪套都能 work
+    const qs = new URLSearchParams({
+      key,
+      action: "upsert",
+      startISO,
+      targetId,          // 新版
+      targetType         // 新版
+    });
 
+    // 舊版相容
     if (targetType === "group") qs.set("groupId", targetId);
     else if (targetType === "room") qs.set("roomId", targetId);
     else qs.set("userId", targetId);
@@ -241,14 +249,22 @@ async function upsertTargetToSheet(targetType, targetId, startISO) {
   }
 }
 
+
 async function getStartISOFromSheet(targetType, targetId) {
   try {
     const base = process.env.GAS_URL;
     const key = process.env.GAS_KEY;
     if (!base || !key) return null;
 
-    const qs = new URLSearchParams({ action: "get", key });
+    // ✅ 同時送「新參數 + 舊參數」，避免 missing params
+    const qs = new URLSearchParams({
+      action: "get",
+      key,
+      targetId,          // 新版
+      targetType         // 新版
+    });
 
+    // 舊版相容
     if (targetType === "group") qs.set("groupId", targetId);
     else if (targetType === "room") qs.set("roomId", targetId);
     else qs.set("userId", targetId);
@@ -256,7 +272,9 @@ async function getStartISOFromSheet(targetType, targetId) {
     const url = `${base}?${qs.toString()}`;
     const r = await fetch(url);
     const txt = (await r.text()).trim();
-    console.log("[GAS GET]", { status: r.status, txt });
+
+    // ✅ 這行很重要：你之後看 log 就知道到底 Apps Script 吃到什麼
+    console.log("[GAS GET]", { url, status: r.status, txt });
 
     if (!/^\d{4}-\d{2}-\d{2}$/.test(txt)) return null;
     return txt;
@@ -265,6 +283,7 @@ async function getStartISOFromSheet(targetType, targetId) {
     return null;
   }
 }
+
 
 async function ensureStartISO(targetType, targetId) {
   const key = cacheKey_(targetType, targetId);
@@ -505,6 +524,7 @@ app.listen(port, () => {
   console.log("[BOOT] FAQ items =", faqItems.length);
   console.log("[BOOT] dayTypeMap keys =", Object.keys(dayTypeMap || {}).length);
 });
+
 
 
 
