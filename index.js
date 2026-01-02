@@ -202,7 +202,7 @@ function helpText() {
     "你可以這樣試試看 😊\n" +
     "「開始」或「重新開始」，我將協助你開啟旅程\n" +
     "或是問我「今天的菜單」，\n" +
-    "或是以「請問」為開頭問我問題\n\n" +
+    "或是以「請問」為開頭問我健康相關的問題\n\n" +
     "📌 群組模式：請用 #開頭，例如 #今天菜單 / #開始 / #help"
   );
 }
@@ -484,7 +484,7 @@ text = text
     if (faqAns) return replyText(event.replyToken, faqAns);
 
     // fallback
-    return replyText(event.replyToken, "我在這裡 😊\n你可以回：「開始」 或 「今天菜單」或 以「請問」為開頭問我問題 \n或打「使用說明」。");
+    return replyText(event.replyToken, "我在這裡 😊\n你可以回：「開始」 或 「今天菜單」或 以「請問」為開頭問我健康相關的問題 \n或打「使用說明」。");
   } catch (err) {
     console.error("HANDLE EVENT ERROR:", err);
     try {
@@ -505,6 +505,7 @@ app.listen(port, () => {
   console.log("[BOOT] FAQ items =", faqItems.length);
   console.log("[BOOT] dayTypeMap keys =", Object.keys(dayTypeMap || {}).length);
 });
+
 
 
 
