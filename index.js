@@ -10,7 +10,8 @@ const path = require("path");
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
-
+// ===== AI 問答冷卻時間（避免打爆 Rate Limit）=====
+const aiCooldown = new Map(); // key: targetId , value: lastCallTime(ms)
 
 async function aiAnswer(question) {
   const vectorStoreId = process.env.OPENAI_VECTOR_STORE_ID;
@@ -362,7 +363,17 @@ text = text
     }
     // ===== ✅ AI 問答模式：以「請問」開頭才走 =====
   if (text.startsWith("請問")) {
-  // 把「請問」拿掉，再交給 AI
+  // ===== AI 問答冷卻（避免打爆 Rate Limit）=====
+  const now = Date.now();
+  const last = aiCooldown.get(targetId) || 0;
+
+  if (now - last < 20000) {
+    return replyText(event.replyToken, "我需要喘口氣 😅 20 秒後再問我一次就可以了！");
+  }
+
+  // ⭐ 只有真的要打 OpenAI 才記錄時間
+  aiCooldown.set(targetId, now);
+    // 把「請問」拿掉，再交給 AI
   const question = text.replace(/^請問\s*/, "").trim();
 
   // UX：如果只打「請問」
@@ -524,6 +535,7 @@ app.listen(port, () => {
   console.log("[BOOT] FAQ items =", faqItems.length);
   console.log("[BOOT] dayTypeMap keys =", Object.keys(dayTypeMap || {}).length);
 });
+
 
 
 
