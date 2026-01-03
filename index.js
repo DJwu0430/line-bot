@@ -14,37 +14,37 @@ const openai = new OpenAI({
 
 async function aiAnswer(question) {
   const vectorStoreId = process.env.OPENAI_VECTOR_STORE_ID;
-  if (!process.env.OPENAI_API_KEY) {
-  console.log("❌ OPENAI_API_KEY missing");
-  }
-  if (!vectorStoreId) {
-    return "系統尚未設定資料庫（OPENAI_VECTOR_STORE_ID）。";
-  }
+  if (!vectorStoreId) return "系統尚未設定資料庫（OPENAI_VECTOR_STORE_ID）。";
 
-  const resp = await openai.responses.create({
-    model: "gpt-4.1-mini",
-    input: [
-      {
-        role: "system",
-        content:
-          "你是健康管理LINE機器人的問答模式。你只能使用 file_search 找到的附件內容回答。" +
-          "若附件找不到相關資訊，請直接回答：『附件資料沒有提到這件事。你可以換個問法，或改問「腸道」、「飲食」、「生活習慣」相關內容。』" +
-          "回答語氣中性、確實、像人說話，國中生看得懂。" +
-          "請用條列回答，每一點後面都要加上【引用】。" +
-          "【引用】格式固定為：〔檔名｜摘錄〕（摘錄請用你看到的原文短句，不要自己編）。"
-      },
-      { role: "user", content: question },
-    ],
-    tools: [
-      {
-        type: "file_search",
-        vector_store_ids: [vectorStoreId],
-      },
-    ],
-  });
+  try {
+    const resp = await openai.responses.create({
+      model: "gpt-4.1-mini",
+      input: [
+        {
+          role: "system",
+          content:
+            "你是健康管理LINE機器人的問答模式。你只能使用 file_search 找到的附件內容回答。" +
+            "若附件找不到相關資訊，請直接回答：『附件資料沒有提到這件事。』" +
+            "回答語氣中性、確實、像人說話，國中生看得懂。" +
+            "請用條列回答，每一點後面都要加上【引用】。" +
+            "【引用】格式固定為：〔檔名｜摘錄〕（摘錄請用你看到的原文短句，不要自己編）。"
+        },
+        { role: "user", content: question },
+      ],
+      tools: [{ type: "file_search", vector_store_ids: [vectorStoreId] }],
+    });
 
-  return resp.output_text || "附件資料沒有提到這件事。";
+    return resp.output_text || "附件資料沒有提到這件事。";
+  } catch (err) {
+    // ✅ 429：RPM 用完
+    if (err?.status === 429 || err?.code === "rate_limit_exceeded") {
+      return "我剛剛太忙了（AI 請求次數達到上限）。你等 20 秒再問一次，我就能回答你 😊";
+    }
+    // 其他錯誤照拋出去，讓上層記錄 log
+    throw err;
+  }
 }
+
 
 
 // ===== LINE config (from Render env vars) =====
@@ -524,6 +524,7 @@ app.listen(port, () => {
   console.log("[BOOT] FAQ items =", faqItems.length);
   console.log("[BOOT] dayTypeMap keys =", Object.keys(dayTypeMap || {}).length);
 });
+
 
 
 
