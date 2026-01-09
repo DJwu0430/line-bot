@@ -1,15 +1,26 @@
 require("dotenv").config();
 
+// ===== AI SDKs =====
+const { GoogleGenAI } = require("@google/genai");
 const OpenAI = require("openai");
 
+// ===== Web / Utils =====
 const express = require("express");
 const line = require("@line/bot-sdk");
 const fs = require("fs");
 const path = require("path");
 
+// ===== AI Clients =====
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
+
+const gemini = new GoogleGenAI({
+  apiKey: process.env.GEMINI_API_KEY,
+});
+
+
+
 // ===== AI 問答冷卻時間（避免打爆 Rate Limit）=====
 const aiCooldown = new Map(); // key: targetId , value: lastCallTime(ms)
 
@@ -46,7 +57,97 @@ async function aiAnswer(question) {
   }
 }
 
+async function aiAnswerGemini(question) {
+  const storeName = process.env.GEMINI_FILE_SEARCH_STORE_NAME;
+  if (!storeName) return "系統尚未設定 Gemini 文件庫（GEMINI_FILE_SEARCH_STORE_NAME）。";
 
+  try {
+    const resp = await gemini.models.generateContent({
+      model: "gemini-2.0-flash",
+      contents: [
+        {
+          role: "user",
+          parts: [
+            {
+              text:
+                "你是健康管理LINE機器人的問答模式。\n" +
+                "你只能使用「文件搜尋」找到的附件內容回答。\n" +
+                "若文件找不到相關資訊，請直接回答：『附件資料沒有提到這件事。』\n" +
+                "回答語氣中性、確實、像人說話，國中生看得懂。\n" +
+                "請用條列回答，每一點後面都要加上【引用】。\n" +
+                "【引用】格式固定為：〔檔名｜摘錄〕（摘錄請用你看到的原文短句，不要自己編）。\n\n" +
+                "問題：" + question,
+            },
+          ],
+        },
+      ],
+      tools: [
+        {
+          fileSearch: {
+            fileSearchStore: storeName,
+          },
+        },
+      ],
+    });
+
+    // ✅ 取回文字（不同 SDK 版本會有差，這樣寫最保險）
+    const text =
+      (typeof resp.text === "function" ? resp.text() : null) ||
+      resp?.response?.text?.() ||
+      resp?.candidates?.[0]?.content?.parts?.map((p) => p.text).join("") ||
+      "";
+
+    // ✅ 如果你有做檔名還原，就在這裡套用
+    // const restored = restoreGeminiFileNames(text);
+    // return restored || "附件資料沒有提到這件事。";
+
+    return text || "附件資料沒有提到這件事。";
+  } catch (err) {
+    if (err?.status === 429) {
+      return "我剛剛太忙了（Gemini 請求次數達到上限）。你等 20 秒再問一次，我就能回答你 😊";
+    }
+    throw err;
+  }
+}
+
+
+    async function aiAnswerSmart(question) {
+  try {
+    // 先用 OpenAI
+    const ans = await aiAnswer(question);
+
+    // 如果 OpenAI 回覆的是你那句「太忙了」(429 友善訊息)，就直接改用 Gemini
+    if (typeof ans === "string" && ans.includes("請求次數達到上限")) {
+      return await aiAnswerGemini(question);
+    }
+
+    return ans;
+  } catch (err) {
+    console.warn("[AI SMART] OpenAI failed, fallback to Gemini:", err?.code || err?.message);
+    return await aiAnswerGemini(question);
+  }
+}
+
+    
+    // 取出文字（不同 SDK 版本可能是 resp.text() 或 resp.response.text()）
+    const text =
+      (typeof resp.text === "function" ? resp.text() : null) ||
+      resp?.response?.text?.() ||
+      resp?.candidates?.[0]?.content?.parts?.map((p) => p.text).join("") ||
+      "";
+
+    // 還原 tmp_*.pdf → 中文檔名
+    const restored = restoreGeminiFileNames(text);
+
+    return restored || "附件資料沒有提到這件事。";
+  } catch (err) {
+    // Gemini 也可能有 429 / quota
+    if (err?.status === 429) {
+      return "我剛剛太忙了（Gemini 請求次數達到上限）。你等 20 秒再問一次，我就能回答你 😊";
+    }
+    throw err;
+  }
+}
 
 // ===== LINE config (from Render env vars) =====
 const config = {
@@ -59,11 +160,14 @@ const client = new line.messagingApi.MessagingApiClient({
   channelAccessToken: config.channelAccessToken,
 });
 // 環境變數檢查（不要印出實際值）
-console.log("[ENV CHECK]",
+console.log(
+  "[ENV CHECK]",
   "LINE_CHANNEL_SECRET", process.env.LINE_CHANNEL_SECRET ? "SET" : "MISSING",
   "LINE_CHANNEL_ACCESS_TOKEN", process.env.LINE_CHANNEL_ACCESS_TOKEN ? "SET" : "MISSING",
   "OPENAI_API_KEY", process.env.OPENAI_API_KEY ? "SET" : "MISSING",
-  "OPENAI_VECTOR_STORE_ID", process.env.OPENAI_VECTOR_STORE_ID ? "SET" : "MISSING"
+  "OPENAI_VECTOR_STORE_ID", process.env.OPENAI_VECTOR_STORE_ID ? "SET" : "MISSING",
+  "GEMINI_API_KEY", process.env.GEMINI_API_KEY ? "SET" : "MISSING",
+  "GEMINI_FILE_SEARCH_STORE_NAME", process.env.GEMINI_FILE_SEARCH_STORE_NAME ? "SET" : "MISSING"
 );
 
 // ===== Load knowledge files (local) =====
@@ -80,6 +184,18 @@ function safeLoadJSON(relPath, fallback) {
     return fallback;
   }
 }
+// ===== Gemini 檔名別名對照（tmp_xxxx.pdf → 中文檔名）=====
+const geminiAliasMap = safeLoadJSON("knowledge/gemini_file_alias_map.json", {});
+function restoreGeminiFileNames(text) {
+  if (!text) return text;
+  let out = text;
+  for (const [tmpName, originalName] of Object.entries(geminiAliasMap || {})) {
+    // 盡量只替換檔名本體，避免誤傷
+    out = out.split(tmpName).join(originalName);
+  }
+  return out;
+}
+
 
 const dayTypeMap = safeLoadJSON("knowledge/day_type_map.json", {});
 const menuDetails = safeLoadJSON("knowledge/menu_details_by_day_type.json", {});
@@ -384,7 +500,7 @@ text = text
     );
   }
 
-  const answer = await aiAnswer(question);
+  const answer = await aiAnswerSmart(question);
   return replyText(event.replyToken, answer);
   }
     
@@ -535,6 +651,7 @@ app.listen(port, () => {
   console.log("[BOOT] FAQ items =", faqItems.length);
   console.log("[BOOT] dayTypeMap keys =", Object.keys(dayTypeMap || {}).length);
 });
+
 
 
 
