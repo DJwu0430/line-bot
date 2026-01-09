@@ -1,7 +1,32 @@
 require("dotenv").config();
 
 // ===== AI SDKs =====
-const { GoogleGenAI } = require("@google/genai");
+let _geminiClientPromise = null;
+
+function getGeminiClient() {
+  if (_geminiClientPromise) return _geminiClientPromise;
+
+  _geminiClientPromise = (async () => {
+    if (!process.env.GEMINI_API_KEY) return null;
+
+    let mod;
+    try {
+      // CJS 版本可用
+      mod = require("@google/genai");
+    } catch (e) {
+      // ESM only → dynamic import
+      mod = await import("@google/genai");
+    }
+
+    const GoogleGenAI = mod.GoogleGenAI || mod.default?.GoogleGenAI;
+    if (!GoogleGenAI) throw new Error("GoogleGenAI not found in @google/genai module");
+
+    return new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+  })();
+
+  return _geminiClientPromise;
+}
+
 const OpenAI = require("openai");
 
 // ===== Web / Utils =====
@@ -9,11 +34,11 @@ const express = require("express");
 const line = require("@line/bot-sdk");
 const fs = require("fs");
 const path = require("path");
-const fetch = require("node-fetch"); // ✅ 你缺這個，GAS 會用到
+
 
 // ===== AI Clients =====
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const gemini = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+
 
 
 
@@ -54,6 +79,9 @@ async function aiAnswer(question) {
 }
 
 async function aiAnswerGemini(question) {
+  const gemini = await getGeminiClient();
+  if (!gemini) return "系統尚未設定 GEMINI_API_KEY，無法使用 Gemini。";
+
   const storeName = process.env.GEMINI_FILE_SEARCH_STORE_NAME;
   if (!storeName) return "系統尚未設定 Gemini 文件庫（GEMINI_FILE_SEARCH_STORE_NAME）。";
 
@@ -117,7 +145,15 @@ async function aiAnswerGemini(question) {
 }
 
 
-    
+async function fetchCompat(url, options) {
+  // Node 18+ (Render 常見) 有內建 fetch
+  if (typeof globalThis.fetch === "function") {
+    return globalThis.fetch(url, options);
+  }
+  // fallback：如果你真的跑在 Node 16，才會走這裡
+  const mod = await import("node-fetch");
+  return mod.default(url, options);
+}
    
 
 // ===== LINE config (from Render env vars) =====
@@ -127,9 +163,22 @@ const config = {
 };
 
 const app = express();
-const client = new line.messagingApi.MessagingApiClient({
-  channelAccessToken: config.channelAccessToken,
-});
+let client;
+if (line.messagingApi?.MessagingApiClient) {
+  // 新版寫法
+  client = new line.messagingApi.MessagingApiClient({
+    channelAccessToken: config.channelAccessToken,
+  });
+} else {
+  // 舊版寫法
+  client = new line.Client(config);
+}
+if (!config.channelSecret || !config.channelAccessToken) {
+  console.error("[FATAL] LINE env missing. Please set LINE_CHANNEL_SECRET and LINE_CHANNEL_ACCESS_TOKEN in Render.");
+  // 直接讓 Render 看見錯誤，方便你在 Logs 一眼知道缺什麼
+  process.exit(1);
+}
+
 // 環境變數檢查（不要印出實際值）
 console.log(
   "[ENV CHECK]",
@@ -329,7 +378,7 @@ async function upsertTargetToSheet(targetType, targetId, startISO) {
     else qs.set("userId", targetId);
 
     const url = `${base}?${qs.toString()}`;
-    const r = await fetch(url);
+    const r = await fetchCompat(url);
     const txt = (await r.text()).trim();
     console.log("[GAS UPSERT]", { status: r.status, txt });
   } catch (e) {
@@ -358,7 +407,7 @@ async function getStartISOFromSheet(targetType, targetId) {
     else qs.set("userId", targetId);
 
     const url = `${base}?${qs.toString()}`;
-    const r = await fetch(url);
+    const r = await fetchCompat(url);
     const txt = (await r.text()).trim();
 
     // ✅ 這行很重要：你之後看 log 就知道到底 Apps Script 吃到什麼
@@ -623,6 +672,7 @@ app.listen(port, () => {
   console.log("[BOOT] FAQ items =", faqItems.length);
   console.log("[BOOT] dayTypeMap keys =", Object.keys(dayTypeMap || {}).length);
 });
+
 
 
 
