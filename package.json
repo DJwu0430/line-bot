@@ -6,6 +6,7 @@
     "start": "node index.js"
   },
   "dependencies": {
+    "@google/genai": "^1.35.0",
     "@line/bot-sdk": "^9.9.0",
     "dotenv": "^17.2.3",
     "express": "^4.22.1",

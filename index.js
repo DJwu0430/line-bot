@@ -1,6 +1,7 @@
 require("dotenv").config();
 
 // ===== AI SDKs =====
+<<<<<<< HEAD
 let _geminiClientPromise = null;
 
 function getGeminiClient() {
@@ -27,6 +28,9 @@ function getGeminiClient() {
   return _geminiClientPromise;
 }
 
+=======
+const { GoogleGenAI } = require("@google/genai");
+>>>>>>> f3d4413 (Add Gemini + fix fetch)
 const OpenAI = require("openai");
 
 // ===== Web / Utils =====
@@ -35,10 +39,21 @@ const line = require("@line/bot-sdk");
 const fs = require("fs");
 const path = require("path");
 
+<<<<<<< HEAD
 
 // ===== AI Clients =====
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
+=======
+// ===== AI Clients =====
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
+const gemini = new GoogleGenAI({
+  apiKey: process.env.GEMINI_API_KEY,
+});
+>>>>>>> f3d4413 (Add Gemini + fix fetch)
 
 
 
@@ -79,15 +94,21 @@ async function aiAnswer(question) {
 }
 
 async function aiAnswerGemini(question) {
+<<<<<<< HEAD
   const gemini = await getGeminiClient();
   if (!gemini) return "系統尚未設定 GEMINI_API_KEY，無法使用 Gemini。";
 
+=======
+>>>>>>> f3d4413 (Add Gemini + fix fetch)
   const storeName = process.env.GEMINI_FILE_SEARCH_STORE_NAME;
   if (!storeName) return "系統尚未設定 Gemini 文件庫（GEMINI_FILE_SEARCH_STORE_NAME）。";
 
   try {
+<<<<<<< HEAD
     // ✅ 這裡用「保守模式」：不強依賴 tools，避免 SDK 版本差異直接炸掉
     // 你可以把 storeName 放進 prompt，讓你自己的 ingest/alias 系統運作
+=======
+>>>>>>> f3d4413 (Add Gemini + fix fetch)
     const resp = await gemini.models.generateContent({
       model: "gemini-2.0-flash",
       contents: [
@@ -97,8 +118,13 @@ async function aiAnswerGemini(question) {
             {
               text:
                 "你是健康管理LINE機器人的問答模式。\n" +
+<<<<<<< HEAD
                 "你只能使用我提供的『文件庫』內容回答（文件庫代號：" + storeName + "）。\n" +
                 "若文件庫找不到相關資訊，請直接回答：『附件資料沒有提到這件事。』\n" +
+=======
+                "你只能使用「文件搜尋」找到的附件內容回答。\n" +
+                "若文件找不到相關資訊，請直接回答：『附件資料沒有提到這件事。』\n" +
+>>>>>>> f3d4413 (Add Gemini + fix fetch)
                 "回答語氣中性、確實、像人說話，國中生看得懂。\n" +
                 "請用條列回答，每一點後面都要加上【引用】。\n" +
                 "【引用】格式固定為：〔檔名｜摘錄〕（摘錄請用你看到的原文短句，不要自己編）。\n\n" +
@@ -107,27 +133,53 @@ async function aiAnswerGemini(question) {
           ],
         },
       ],
+<<<<<<< HEAD
     });
 
+=======
+      tools: [
+        {
+          fileSearch: {
+            fileSearchStore: storeName,
+          },
+        },
+      ],
+    });
+
+    // ✅ 取回文字（不同 SDK 版本會有差，這樣寫最保險）
+>>>>>>> f3d4413 (Add Gemini + fix fetch)
     const text =
       (typeof resp.text === "function" ? resp.text() : null) ||
       resp?.response?.text?.() ||
       resp?.candidates?.[0]?.content?.parts?.map((p) => p.text).join("") ||
       "";
 
+<<<<<<< HEAD
     const restored = restoreGeminiFileNames(text);
     return restored || "附件資料沒有提到這件事。";
+=======
+    // ✅ 如果你有做檔名還原，就在這裡套用
+    // const restored = restoreGeminiFileNames(text);
+    // return restored || "附件資料沒有提到這件事。";
+
+    return text || "附件資料沒有提到這件事。";
+>>>>>>> f3d4413 (Add Gemini + fix fetch)
   } catch (err) {
     if (err?.status === 429) {
       return "我剛剛太忙了（Gemini 請求次數達到上限）。你等 20 秒再問一次，我就能回答你 😊";
     }
+<<<<<<< HEAD
     // ✅ 任何 Gemini 錯誤都不要讓 webhook 500：回覆友善訊息
     console.error("[GEMINI ERROR]", err?.message || err);
     return "我剛剛連線 Gemini 失敗了，請稍後再問一次（或改用 OpenAI 付費帳號）。";
+=======
+    throw err;
+>>>>>>> f3d4413 (Add Gemini + fix fetch)
   }
 }
 
 
+<<<<<<< HEAD
 
    async function aiAnswerSmart(question) {
   try {
@@ -137,6 +189,18 @@ async function aiAnswerGemini(question) {
     if (typeof ans === "string" && ans.includes("請求次數達到上限")) {
       return await aiAnswerGemini(question);
       }
+=======
+    async function aiAnswerSmart(question) {
+  try {
+    // 先用 OpenAI
+    const ans = await aiAnswer(question);
+
+    // 如果 OpenAI 回覆的是你那句「太忙了」(429 友善訊息)，就直接改用 Gemini
+    if (typeof ans === "string" && ans.includes("請求次數達到上限")) {
+      return await aiAnswerGemini(question);
+    }
+
+>>>>>>> f3d4413 (Add Gemini + fix fetch)
     return ans;
   } catch (err) {
     console.warn("[AI SMART] OpenAI failed, fallback to Gemini:", err?.code || err?.message);
@@ -144,6 +208,7 @@ async function aiAnswerGemini(question) {
   }
 }
 
+<<<<<<< HEAD
 
 async function fetchCompat(url, options) {
   // Node 18+ (Render 常見) 有內建 fetch
@@ -154,6 +219,9 @@ async function fetchCompat(url, options) {
   const mod = await import("node-fetch");
   return mod.default(url, options);
 }
+=======
+    
+>>>>>>> f3d4413 (Add Gemini + fix fetch)
    
 
 // ===== LINE config (from Render env vars) =====
@@ -163,6 +231,7 @@ const config = {
 };
 
 const app = express();
+<<<<<<< HEAD
 let client;
 if (line.messagingApi?.MessagingApiClient) {
   // 新版寫法
@@ -179,6 +248,11 @@ if (!config.channelSecret || !config.channelAccessToken) {
   process.exit(1);
 }
 
+=======
+const client = new line.messagingApi.MessagingApiClient({
+  channelAccessToken: config.channelAccessToken,
+});
+>>>>>>> f3d4413 (Add Gemini + fix fetch)
 // 環境變數檢查（不要印出實際值）
 console.log(
   "[ENV CHECK]",
@@ -378,7 +452,11 @@ async function upsertTargetToSheet(targetType, targetId, startISO) {
     else qs.set("userId", targetId);
 
     const url = `${base}?${qs.toString()}`;
+<<<<<<< HEAD
     const r = await fetchCompat(url);
+=======
+    const r = await fetch(url);
+>>>>>>> f3d4413 (Add Gemini + fix fetch)
     const txt = (await r.text()).trim();
     console.log("[GAS UPSERT]", { status: r.status, txt });
   } catch (e) {
@@ -407,7 +485,11 @@ async function getStartISOFromSheet(targetType, targetId) {
     else qs.set("userId", targetId);
 
     const url = `${base}?${qs.toString()}`;
+<<<<<<< HEAD
     const r = await fetchCompat(url);
+=======
+    const r = await fetch(url);
+>>>>>>> f3d4413 (Add Gemini + fix fetch)
     const txt = (await r.text()).trim();
 
     // ✅ 這行很重要：你之後看 log 就知道到底 Apps Script 吃到什麼
@@ -501,7 +583,10 @@ text = text
   if (text.startsWith("請問")) {
   // ===== AI 問答冷卻（避免打爆 Rate Limit）=====
   const now = Date.now();
+<<<<<<< HEAD
   const cooldownKey = cacheKey_(targetType, targetId);
+=======
+>>>>>>> f3d4413 (Add Gemini + fix fetch)
   const last = aiCooldown.get(targetId) || 0;
 
   if (now - last < 20000) {
@@ -687,5 +772,8 @@ app.listen(port, () => {
 
 
 
+<<<<<<< HEAD
 
 
+=======
+>>>>>>> f3d4413 (Add Gemini + fix fetch)
