@@ -129,25 +129,7 @@ async function aiAnswerGemini(question) {
 }
 
     
-    // 取出文字（不同 SDK 版本可能是 resp.text() 或 resp.response.text()）
-    const text =
-      (typeof resp.text === "function" ? resp.text() : null) ||
-      resp?.response?.text?.() ||
-      resp?.candidates?.[0]?.content?.parts?.map((p) => p.text).join("") ||
-      "";
-
-    // 還原 tmp_*.pdf → 中文檔名
-    const restored = restoreGeminiFileNames(text);
-
-    return restored || "附件資料沒有提到這件事。";
-  } catch (err) {
-    // Gemini 也可能有 429 / quota
-    if (err?.status === 429) {
-      return "我剛剛太忙了（Gemini 請求次數達到上限）。你等 20 秒再問一次，我就能回答你 😊";
-    }
-    throw err;
-  }
-}
+   
 
 // ===== LINE config (from Render env vars) =====
 const config = {
@@ -651,6 +633,7 @@ app.listen(port, () => {
   console.log("[BOOT] FAQ items =", faqItems.length);
   console.log("[BOOT] dayTypeMap keys =", Object.keys(dayTypeMap || {}).length);
 });
+
 
 
 
