@@ -9,15 +9,11 @@ const express = require("express");
 const line = require("@line/bot-sdk");
 const fs = require("fs");
 const path = require("path");
+const fetch = require("node-fetch"); // ✅ 你缺這個，GAS 會用到
 
 // ===== AI Clients =====
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
-
-const gemini = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY,
-});
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const gemini = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 
 
@@ -62,6 +58,8 @@ async function aiAnswerGemini(question) {
   if (!storeName) return "系統尚未設定 Gemini 文件庫（GEMINI_FILE_SEARCH_STORE_NAME）。";
 
   try {
+    // ✅ 這裡用「保守模式」：不強依賴 tools，避免 SDK 版本差異直接炸掉
+    // 你可以把 storeName 放進 prompt，讓你自己的 ingest/alias 系統運作
     const resp = await gemini.models.generateContent({
       model: "gemini-2.0-flash",
       contents: [
@@ -71,8 +69,8 @@ async function aiAnswerGemini(question) {
             {
               text:
                 "你是健康管理LINE機器人的問答模式。\n" +
-                "你只能使用「文件搜尋」找到的附件內容回答。\n" +
-                "若文件找不到相關資訊，請直接回答：『附件資料沒有提到這件事。』\n" +
+                "你只能使用我提供的『文件庫』內容回答（文件庫代號：" + storeName + "）。\n" +
+                "若文件庫找不到相關資訊，請直接回答：『附件資料沒有提到這件事。』\n" +
                 "回答語氣中性、確實、像人說話，國中生看得懂。\n" +
                 "請用條列回答，每一點後面都要加上【引用】。\n" +
                 "【引用】格式固定為：〔檔名｜摘錄〕（摘錄請用你看到的原文短句，不要自己編）。\n\n" +
@@ -81,52 +79,43 @@ async function aiAnswerGemini(question) {
           ],
         },
       ],
-      tools: [
-        {
-          fileSearch: {
-            fileSearchStore: storeName,
-          },
-        },
-      ],
     });
 
-    // ✅ 取回文字（不同 SDK 版本會有差，這樣寫最保險）
     const text =
       (typeof resp.text === "function" ? resp.text() : null) ||
       resp?.response?.text?.() ||
       resp?.candidates?.[0]?.content?.parts?.map((p) => p.text).join("") ||
       "";
 
-    // ✅ 如果你有做檔名還原，就在這裡套用
-    // const restored = restoreGeminiFileNames(text);
-    // return restored || "附件資料沒有提到這件事。";
-
-    return text || "附件資料沒有提到這件事。";
+    const restored = restoreGeminiFileNames(text);
+    return restored || "附件資料沒有提到這件事。";
   } catch (err) {
     if (err?.status === 429) {
       return "我剛剛太忙了（Gemini 請求次數達到上限）。你等 20 秒再問一次，我就能回答你 😊";
     }
-    throw err;
+    // ✅ 任何 Gemini 錯誤都不要讓 webhook 500：回覆友善訊息
+    console.error("[GEMINI ERROR]", err?.message || err);
+    return "我剛剛連線 Gemini 失敗了，請稍後再問一次（或改用 OpenAI 付費帳號）。";
   }
 }
 
 
-    async function aiAnswerSmart(question) {
+
+   async function aiAnswerSmart(question) {
   try {
-    // 先用 OpenAI
     const ans = await aiAnswer(question);
 
-    // 如果 OpenAI 回覆的是你那句「太忙了」(429 友善訊息)，就直接改用 Gemini
+    // OpenAI 429 友善訊息 → 直接切 Gemini
     if (typeof ans === "string" && ans.includes("請求次數達到上限")) {
       return await aiAnswerGemini(question);
-    }
-
+      }
     return ans;
   } catch (err) {
     console.warn("[AI SMART] OpenAI failed, fallback to Gemini:", err?.code || err?.message);
     return await aiAnswerGemini(question);
   }
 }
+
 
     
    
@@ -463,6 +452,7 @@ text = text
   if (text.startsWith("請問")) {
   // ===== AI 問答冷卻（避免打爆 Rate Limit）=====
   const now = Date.now();
+  const cooldownKey = cacheKey_(targetType, targetId);
   const last = aiCooldown.get(targetId) || 0;
 
   if (now - last < 20000) {
@@ -633,6 +623,7 @@ app.listen(port, () => {
   console.log("[BOOT] FAQ items =", faqItems.length);
   console.log("[BOOT] dayTypeMap keys =", Object.keys(dayTypeMap || {}).length);
 });
+
 
 
 
