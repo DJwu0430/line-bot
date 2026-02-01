@@ -61,18 +61,11 @@ async function aiAnswer(question) {
   }
 }
 
-// 保留同名介面，讓 handleEvent 不用改
-async function aiAnswerSmart(question) {
-  return await aiAnswer(question);
-}
-
 /* ======================================================
  * fetch 相容（Node 18 / Node 16）
  * ====================================================== */
 async function fetchCompat(url, options) {
-  if (typeof globalThis.fetch === "function") {
-    return globalThis.fetch(url, options);
-  }
+  if (typeof globalThis.fetch === "function") return globalThis.fetch(url, options);
   const mod = await import("node-fetch");
   return mod.default(url, options);
 }
@@ -125,52 +118,68 @@ function safeLoadJSON(relPath, fallback) {
   }
 }
 
-const dayTypeMap = safeLoadJSON("knowledge/day_type_map.json", {});
-const menuDetails = safeLoadJSON("knowledge/menu_details_by_day_type.json", {});
-const pushTemplates = safeLoadJSON("knowledge/push_templates.json", {});
-const companionByDay = safeLoadJSON("knowledge/companion_by_day.json", {});
 const faqJSON = safeLoadJSON("knowledge/faq_50.json", { items: [] });
 const faqItems = Array.isArray(faqJSON.items) ? faqJSON.items : [];
 
 /* ======================================================
- * In-memory cache
+ * FAQ matching（先命中 FAQ 再打 OpenAI）
+ * - 你的 faq_50.json 建議結構：
+ *   { "items":[ { "keywords":[...], "answer":"..." }, ... ] }
  * ====================================================== */
-const startCache = new Map();
+function normalizeText(s) {
+  return (s || "")
+    .toLowerCase()
+    .replace(/\s+/g, "")
+    .replace(/[，。！？、,.!?]/g, "");
+}
+
+function applySynonyms(t) {
+  const rules = [
+    ["今天哪一天", "今天是哪一天"],
+    ["今天哪天", "今天是哪一天"],
+    ["幾天", "第幾天"],
+    ["喝茶", "茶"],
+    ["咖啡因", "咖啡"],
+    ["酒精", "酒"],
+    ["手搖飲", "飲料"],
+    ["珍珠奶茶", "珍奶"],
+  ];
+  let out = t;
+  for (const [a, b] of rules) out = out.replaceAll(a, b);
+  return out;
+}
+
+function matchFAQ(text) {
+  let t = applySynonyms(normalizeText(text));
+  if (!t) return null;
+
+  let bestAns = null;
+  let bestScore = 0;
+
+  for (const item of faqItems || []) {
+    const kws = item.keywords || [];
+    if (!Array.isArray(kws) || !item.answer) continue;
+
+    let score = 0;
+    for (const kwRaw of kws) {
+      const kw = applySynonyms(normalizeText(kwRaw));
+      if (!kw) continue;
+      if (t.includes(kw)) score += Math.min(3, Math.ceil(kw.length / 2));
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestAns = item.answer;
+    }
+  }
+
+  // 命中門檻：>=1（你可以改成 >=2 更保守）
+  return bestScore >= 1 ? bestAns : null;
+}
 
 /* ======================================================
- * Helper functions
+ * Helpers
  * ====================================================== */
-function getTodayISO_TW() {
-  const d = new Date();
-  const tw = new Date(d.toLocaleString("en-US", { timeZone: "Asia/Taipei" }));
-  return tw.toISOString().slice(0, 10);
-}
-
-function daysBetweenISO(startISO, todayISO) {
-  const s = new Date(startISO + "T00:00:00");
-  const t = new Date(todayISO + "T00:00:00");
-  return Math.floor((t - s) / 86400000);
-}
-
-function clampDay(d) {
-  return Math.min(45, Math.max(1, d));
-}
-
-function resolveDayType(day) {
-  return dayTypeMap[String(day)] || "SLIM";
-}
-
-function dayTypeLabel(dt) {
-  return {
-    PREP: "準備日",
-    PROTEIN_CONSECUTIVE: "連續蛋白日",
-    PROTEIN_SINGLE: "單日蛋白日",
-    SLIM_FIRST: "第一次纖體日",
-    SLIM: "纖體日",
-    METABOLIC: "新陳代謝日",
-  }[dt] || dt;
-}
-
 function getTarget_(event) {
   const s = event.source || {};
   if (s.type === "group") return { targetType: "group", targetId: s.groupId };
@@ -178,55 +187,11 @@ function getTarget_(event) {
   return { targetType: "user", targetId: s.userId };
 }
 
-function cacheKey_(t, id) {
-  return `${t}:${id}`;
-}
-
-function getCurrentDayAndTypeFromStartISO_(startISO) {
-  if (!startISO) return null;
-  const today = getTodayISO_TW();
-  const day = clampDay(daysBetweenISO(startISO, today) + 1);
-  return { day, dayType: resolveDayType(day) };
-}
-
-/* ======================================================
- * GAS bridge
- * ====================================================== */
-async function upsertTargetToSheet(targetType, targetId, startISO) {
-  try {
-    if (!process.env.GAS_URL || !process.env.GAS_KEY) return;
-
-    const qs = new URLSearchParams({
-      key: process.env.GAS_KEY,
-      action: "upsert",
-      targetType,
-      targetId,
-      startISO,
-    });
-
-    const url = `${process.env.GAS_URL}?${qs.toString()}`;
-    await fetchCompat(url);
-  } catch {}
-}
-
-async function getStartISOFromSheet(targetType, targetId) {
-  try {
-    if (!process.env.GAS_URL || !process.env.GAS_KEY) return null;
-
-    const qs = new URLSearchParams({
-      key: process.env.GAS_KEY,
-      action: "get",
-      targetType,
-      targetId,
-    });
-
-    const url = `${process.env.GAS_URL}?${qs.toString()}`;
-    const r = await fetchCompat(url);
-    const txt = (await r.text()).trim();
-    return /^\d{4}-\d{2}-\d{2}$/.test(txt) ? txt : null;
-  } catch {
-    return null;
-  }
+async function replyText(replyToken, text) {
+  return client.replyMessage({
+    replyToken,
+    messages: [{ type: "text", text }],
+  });
 }
 
 /* ======================================================
@@ -235,7 +200,7 @@ async function getStartISOFromSheet(targetType, targetId) {
 app.post("/webhook", line.middleware(config), (req, res) => {
   res.sendStatus(200);
   const events = req.body?.events || [];
-  events.forEach(handleEvent);
+  Promise.allSettled(events.map(handleEvent)).catch(() => {});
 });
 
 app.get("/", (_, res) => res.send("LINE Bot is running"));
@@ -244,39 +209,59 @@ app.get("/", (_, res) => res.send("LINE Bot is running"));
  * Main handler
  * ====================================================== */
 async function handleEvent(event) {
-  if (event.type !== "message" || event.message.type !== "text") return;
+  try {
+    if (event.type !== "message" || event.message.type !== "text") return;
 
-  const { targetType, targetId } = getTarget_(event);
-  let text = (event.message.text || "").trim();
+    const { targetType, targetId } = getTarget_(event);
+    let text = (event.message.text || "").trim();
 
-  if ((targetType === "group" || targetType === "room") && !text.startsWith("#")) return;
-  if (text.startsWith("#")) text = text.slice(1).trim();
+    // UX：統一全形/半形符號
+    text = text.replace(/[？]/g, "?").replace(/\s+/g, " ").trim();
 
-  // AI 問答
-  if (text.startsWith("請問")) {
-    const now = Date.now();
-    const last = aiCooldown.get(targetId) || 0;
-    if (now - last < 20000) {
-      return client.replyMessage({
-        replyToken: event.replyToken,
-        messages: [{ type: "text", text: "我需要喘口氣 😅 20 秒後再問我一次就可以了！" }],
-      });
-    }
-    aiCooldown.set(targetId, now);
-
-    const q = text.replace(/^請問\s*/, "").trim();
-    if (!q) {
-      return client.replyMessage({
-        replyToken: event.replyToken,
-        messages: [{ type: "text", text: "例如：請問腸道健康跟什麼有關係？" }],
-      });
+    // 群組/room 只接受 # 指令
+    if ((targetType === "group" || targetType === "room") && !text.startsWith("#")) return;
+    if ((targetType === "group" || targetType === "room") && text.startsWith("#")) {
+      text = text.slice(1).trim();
+      if (!text) return;
     }
 
-    const ans = await aiAnswerSmart(q);
-    return client.replyMessage({
-      replyToken: event.replyToken,
-      messages: [{ type: "text", text: ans }],
-    });
+    // ✅ 1) 先命中 FAQ（任何輸入都先試）
+    const faqAns = matchFAQ(text);
+    if (faqAns) {
+      return replyText(event.replyToken, faqAns);
+    }
+
+    // ✅ 2) FAQ 沒命中 → 只有「請問」才打 OpenAI
+    if (text.startsWith("請問")) {
+      const now = Date.now();
+      const last = aiCooldown.get(targetId) || 0;
+
+      if (now - last < 20000) {
+        return replyText(event.replyToken, "我需要喘口氣 😅 20 秒後再問我一次就可以了！");
+      }
+      aiCooldown.set(targetId, now);
+
+      const question = text.replace(/^請問\s*/, "").trim();
+      if (!question) {
+        return replyText(event.replyToken, "你可以這樣問我 😊\n例如：\n請問腸道健康跟什麼有關係？");
+      }
+
+      const ans = await aiAnswer(question);
+      return replyText(event.replyToken, ans);
+    }
+
+    // ✅ 3) 其他非請問且 FAQ 沒中：回引導
+    return replyText(
+      event.replyToken,
+      "我在這裡 😊\n你可以直接問我常見問題（例如：咖啡/酒/飲料/第幾天），或用「請問」開頭問我健康相關問題。"
+    );
+  } catch (err) {
+    console.error("HANDLE EVENT ERROR:", err);
+    try {
+      if (event?.replyToken) {
+        await replyText(event.replyToken, "我剛剛處理時遇到小問題，你可以再傳一次 😊");
+      }
+    } catch {}
   }
 }
 
@@ -286,4 +271,5 @@ async function handleEvent(event) {
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
   console.log("Server started on port", port);
+  console.log("[BOOT] FAQ items =", faqItems.length);
 });
