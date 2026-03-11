@@ -85,6 +85,7 @@ async function fetchCompat(url, options) {
 
 /* ======================================================
  * Google Apps Script API
+ * 相容版：同時送 targetId + userId
  * ====================================================== */
 async function gasGetStartISO(targetId, targetType = "user") {
   if (!GAS_URL || !GAS_KEY) {
@@ -96,6 +97,7 @@ async function gasGetStartISO(targetId, targetType = "user") {
     `${GAS_URL}?action=get` +
     `&key=${encodeURIComponent(GAS_KEY)}` +
     `&targetId=${encodeURIComponent(targetId)}` +
+    `&userId=${encodeURIComponent(targetId)}` +
     `&targetType=${encodeURIComponent(targetType)}`;
 
   console.log("[GAS GET URL]", url);
@@ -124,6 +126,7 @@ async function gasUpsertStartISO(targetId, targetType = "user", startISO) {
     `${GAS_URL}?action=upsert` +
     `&key=${encodeURIComponent(GAS_KEY)}` +
     `&targetId=${encodeURIComponent(targetId)}` +
+    `&userId=${encodeURIComponent(targetId)}` +
     `&targetType=${encodeURIComponent(targetType)}` +
     `&startISO=${encodeURIComponent(startISO)}`;
 
