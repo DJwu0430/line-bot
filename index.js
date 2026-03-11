@@ -310,9 +310,26 @@ async function handleEvent(event) {
   if (event.message.type !== "text") return;
 
   const { targetType, targetId } = getTarget_(event);
-  const text = (event.message.text || "").trim();
+  let text = (event.message.text || "").trim();
 
   console.log("[TARGET]", targetType, targetId);
+  console.log("[USER TEXT RAW]", text);
+
+  // 群組 / room 必須用 # 開頭
+  if ((targetType === "group" || targetType === "room") && !text.startsWith("#")) {
+    console.log("[SKIP] group/room message without #");
+    return;
+  }
+
+  // 群組 / room 去掉 # 後再處理
+  if ((targetType === "group" || targetType === "room") && text.startsWith("#")) {
+    text = text.slice(1).trim();
+    if (!text) {
+      console.log("[SKIP] empty command after #");
+      return;
+    }
+  }
+
   console.log("[USER TEXT]", text);
 
   /* ===============================
@@ -468,7 +485,9 @@ async function handleEvent(event) {
    * =============================== */
   return replyText(
     event.replyToken,
-    "你可以輸入：\nstatus\n開始今天\n開始 2026-03-11\n我的開始日\n第幾天"
+    targetType === "group" || targetType === "room"
+      ? "群組中請用 # 開頭下指令，例如：\n#status\n#開始今天\n#我的開始日\n#第幾天"
+      : "你可以輸入：\nstatus\n開始今天\n開始 2026-03-11\n我的開始日\n第幾天"
   );
 }
 
